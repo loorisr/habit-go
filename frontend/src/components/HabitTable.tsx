@@ -58,12 +58,18 @@ export default function HabitTable({ habits, dates, onToggle, onDecrement }: Pro
             <span className="text-gray-500">{collapsed.has(groupName) ? '▸' : '▾'}</span>
           </button>
           {!collapsed.has(groupName) && <div className="overflow-x-auto">
-            <table className="w-full text-sm" role="grid" aria-label={groupName}>
+            <table className="w-full text-sm table-fixed" role="grid" aria-label={groupName}>
+              <colgroup>
+                <col />
+                <col style={{ width: '88px' }} />
+                <col style={{ width: '88px' }} />
+                <col style={{ width: '88px' }} />
+              </colgroup>
               <thead>
                 <tr className="text-xs text-gray-500 border-b" role="row">
-                  <th className="text-left px-4 py-2 sticky left-0 bg-white dark:bg-gray-800" scope="col">{t('habit')}</th>
+                  <th className="text-left px-4 py-2 sticky left-0 bg-white" scope="col">{t('habit')}</th>
                   {displayDates.map(d => (
-                    <th key={d} className="px-3 py-2 text-center whitespace-nowrap">
+                    <th key={d} className="px-2 py-2 text-center whitespace-nowrap w-[88px] min-w-[88px]">
                       {d === localDateStr() ? t('today') : d === localDateStr(new Date(Date.now() - 86400000)) ? t('yesterday') : t('dayMinus2')}
                       <div className="font-normal text-[11px]">{d}</div>
                     </th>
@@ -75,13 +81,13 @@ export default function HabitTable({ habits, dates, onToggle, onDecrement }: Pro
                   const map = new Map(habit.recent_entries?.map(e => [e.date, e.value]))
                   return (
                     <tr key={habit.id} className="border-b hover:bg-gray-50">
-                      <td className="px-4 py-2 font-medium sticky left-0 bg-white dark:bg-gray-800">
-                        <Link to={`/habits/${habit.id}`} className="hover:underline text-green-700 dark:text-green-400 block">{habit.name}</Link>
+                      <td className="px-4 py-2 font-medium sticky left-0 bg-white">
+                        <Link to={`/habits/${habit.id}`} className="hover:underline text-green-700 block">{habit.name}</Link>
                         {habit.progress && (() => {
                           const pct = formatProgressPct(habit.progress.percentage)
                           const showOverflow = pct.actual !== Math.round(habit.progress.percentage) || pct.actual > 100 || pct.actual < 0
                           return (
-                            <div title={showOverflow ? `${Math.round(habit.progress.percentage)}%` : undefined} className={`mt-1.5 text-xs px-2 py-0.5 rounded inline-block font-mono ${habit.progress.success ? 'bg-green-100 text-green-700 dark:bg-green-900 dark:text-green-200' : 'bg-red-100 text-red-700 dark:bg-red-900 dark:text-red-200'}`}>
+                            <div title={showOverflow ? `${Math.round(habit.progress.percentage)}%` : undefined} className={`mt-1.5 text-xs px-2 py-0.5 rounded inline-block font-mono ${habit.progress.success ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>
                               {habit.progress.current}{habit.unit && habit.type === 'numerical' ? ' ' + habit.unit : ''} {habit.is_negative ? '≤' : '/'} {habit.progress.target}{habit.unit && habit.type === 'numerical' ? ' ' + habit.unit : ''} {habit.progress.success ? '✓' : '✗'} • {pct.display}
                             </div>
                           )
@@ -90,7 +96,7 @@ export default function HabitTable({ habits, dates, onToggle, onDecrement }: Pro
                       {displayDates.map(date => {
                         const val = map.get(date)
                         return (
-                          <td key={date} className="px-2 py-2">
+                          <td key={date} className="px-2 py-2 w-[88px] min-w-[88px]">
                             <div className="flex justify-center">
                               <CellButton habit={habit} date={date} value={val} onToggle={onToggle} onDecrement={onDecrement} />
                             </div>
