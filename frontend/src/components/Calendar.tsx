@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import type { Entry, Habit } from '../api'
 import { localDateStr } from '../api'
+import { useI18n } from '../i18n'
 
 type Props = {
   habit: Habit
@@ -30,6 +31,7 @@ function intensityClass(habit: Habit, value: number | undefined): string {
 }
 
 export default function Calendar({ habit, entries, onEdit }: Props) {
+  const { t, lang } = useI18n()
   const [cur, setCur] = useState(() => {
     const d = new Date()
     d.setDate(1)
@@ -57,12 +59,12 @@ export default function Calendar({ habit, entries, onEdit }: Props) {
     <div className="bg-white rounded shadow p-4">
       <div className="flex items-center justify-between mb-3">
         <button onClick={() => setCur(new Date(year, month - 1, 1))} className="px-2 py-1 border rounded">‹</button>
-        <div className="font-semibold capitalize">{cur.toLocaleDateString('fr-FR', { month: 'long', year: 'numeric' })}</div>
+        <div className="font-semibold capitalize">{cur.toLocaleDateString(lang === 'en' ? 'en-US' : 'fr-FR', { month: 'long', year: 'numeric' })}</div>
         <button onClick={() => setCur(new Date(year, month + 1, 1))} className="px-2 py-1 border rounded">›</button>
       </div>
-      <button onClick={() => { const d=new Date(); d.setDate(1); setCur(d) }} className="text-xs text-green-600 mb-2">Aujourd'hui</button>
+      <button onClick={() => { const d=new Date(); d.setDate(1); setCur(d) }} className="text-xs text-green-600 mb-2">{t('todayBtn')}</button>
       <div className="grid grid-cols-7 gap-1 text-xs">
-        {['Lun','Mar','Mer','Jeu','Ven','Sam','Dim'].map(d => <div key={d} className="text-center text-gray-400 py-1">{d}</div>)}
+        {[t('mon'),t('tue'),t('wed'),t('thu'),t('fri'),t('sat'),t('sun')].map(d => <div key={d} className="text-center text-gray-400 py-1">{d}</div>)}
         {cells.map((date, idx) => {
           if (date === null) return <div key={idx} />
           const val = map.get(date)

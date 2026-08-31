@@ -1,0 +1,16 @@
+data/
+frontend/node_modules/
+frontend/dist/
+.git/
+.gitignore
+habit-go
+*.db
+*.db-wal
+*.db-shm
+node_modules
+.env
+*.log
+npm-debug.log
+frontend/vite.config.js
+frontend/vite.config.d.ts
+*.tsbuildinfo
