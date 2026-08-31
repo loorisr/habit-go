@@ -18,23 +18,25 @@ COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
 COPY --from=frontend-builder /app/frontend/dist ./frontend/dist
-# pure Go build (modernc sqlite, no CGO)
-RUN CGO_ENABLED=0 go build -o habit-go .
+# pure Go build (modernc sqlite, no CGO) - static, works on scratch
+RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o habit-go .
 
-# Stage 3: minimal runtime
-FROM alpine:3.24 AS runtime
+# Stage 3: pre-create /app/data with correct owner for non-root scratch
+FROM alpine:3.24 AS perms
+RUN mkdir -p /app/data && chown -R 65532:65532 /app
+
+# Stage 4: minimal runtime from scratch
+FROM scratch
+COPY --from=perms /app /app
 WORKDIR /app
-RUN apk add --no-cache ca-certificates wget \
- && adduser -D -s /bin/sh appuser \
- && mkdir -p data && chown appuser:appuser data
-COPY --from=go-builder /app/habit-go ./
-RUN chown appuser:appuser habit-go
-USER appuser
+COPY --from=go-builder --chown=65532:65532 /app/habit-go ./
+# scratch has no shell/wget -> no HEALTHCHECK (use external check or disable)
+# previous alpine healthcheck used wget which is unavailable in scratch
+# HEALTHCHECK NONE disables the default
+HEALTHCHECK NONE
+USER 65532:65532
 ENV PORT=8080
 ENV DB_PATH=data/habits.db
 EXPOSE 8080
 VOLUME ["/app/data"]
-# use shell form so $PORT is expanded at runtime
-HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
-  CMD wget --no-verbose --tries=1 --spider http://localhost:${PORT:-8080}/api/health || exit 1
 CMD ["./habit-go"]

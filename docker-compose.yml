@@ -15,12 +15,16 @@ services:
     volumes:
       - ./data:/app/data
     restart: unless-stopped
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    # scratch has no shell/wget -> healthcheck disabled
+    # if you need a healthcheck, run it from the host or add a sidecar
+    # alternative: test: ["NONE"]
     healthcheck:
-      test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://localhost:$${PORT:-8080}/api/health || exit 1"]
-      interval: 30s
-      timeout: 3s
-      retries: 3
-      start_period: 10s
+      test: ["NONE"]
 
 # volumes:
 #   habit-data:
