@@ -2,32 +2,12 @@ import { useState } from 'react'
 import type { Entry, Habit } from '../api'
 import { localDateStr } from '../api'
 import { useI18n } from '../i18n'
+import { getHabitIntensity } from '../lib/habitIntensity'
 
 type Props = {
   habit: Habit
   entries: Entry[]
   onEdit: (date: string, current?: number) => void
-}
-
-function intensityClass(habit: Habit, value: number | undefined): string {
-  if (value === undefined) return 'bg-gray-100'
-  if (habit.is_negative) {
-    // success = value <= goal => light green if success, red if exceed
-    if (value <= habit.goal_value) return 'bg-green-200 hover:bg-green-300'
-    const ratio = Math.min(value / habit.goal_value, 2)
-    if (ratio > 1.5) return 'bg-red-500 text-white'
-    return 'bg-red-300'
-  } else {
-    if (habit.type === 'boolean') {
-      return value >= 1 ? 'bg-green-500 text-white' : 'bg-gray-100'
-    }
-    const ratio = Math.min(value / habit.goal_value, 1)
-    if (ratio >= 1) return 'bg-green-500 text-white'
-    if (ratio >= 0.66) return 'bg-green-300'
-    if (ratio >= 0.33) return 'bg-green-200'
-    if (ratio > 0) return 'bg-green-100'
-    return 'bg-gray-100'
-  }
 }
 
 export default function Calendar({ habit, entries, onEdit }: Props) {
@@ -74,7 +54,7 @@ export default function Calendar({ habit, entries, onEdit }: Props) {
               key={date}
               onClick={() => onEdit(date, val)}
               title={val !== undefined ? `${date}: ${val}` : date}
-              className={`h-10 rounded flex flex-col items-center justify-center border ${intensityClass(habit, val)} ${isToday ? 'ring-2 ring-green-400' : ''}`}
+              className={`h-10 rounded flex flex-col items-center justify-center border ${getHabitIntensity(habit, val)} ${isToday ? 'ring-2 ring-green-400' : ''}`}
             >
               <span className="text-[11px]">{date.slice(8)}</span>
               {val !== undefined && <span className="text-[10px] font-semibold">{habit.type==='boolean' ? (val>=1?'✓':'-') : val}</span>}

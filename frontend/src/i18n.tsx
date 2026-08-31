@@ -264,6 +264,7 @@ export function LanguageProvider({ children }: { children: React.ReactNode }) {
   const setLang = (l: Lang) => {
     setLangState(l)
     try { localStorage.setItem(LANG_KEY, l) } catch {}
+    try { document.documentElement.lang = l } catch {}
   }
 
   useEffect(() => {
@@ -273,9 +274,19 @@ export function LanguageProvider({ children }: { children: React.ReactNode }) {
     } catch {}
   }, [])
 
+  useEffect(() => {
+    try { document.documentElement.lang = lang } catch {}
+  }, [lang])
+
   const t = (key: string) => {
     const d = translations[lang]
-    return d[key] ?? translations.fr[key] ?? key
+    if (d[key] !== undefined) return d[key]
+    if (translations.fr[key] !== undefined) return translations.fr[key]
+    // fallback: return key and warn in dev
+    if (typeof window !== 'undefined' && (import.meta as any).env?.DEV) {
+      console.warn(`Missing translation for key: ${key} (lang: ${lang})`)
+    }
+    return key
   }
 
   return <I18nContext.Provider value={{ lang, setLang, t }}>{children}</I18nContext.Provider>

@@ -1,8 +1,9 @@
 import { Link } from 'react-router-dom'
 import type { Habit } from '../api'
 import { localDateStr } from '../api'
-import { useRef, useState } from 'react'
+import { useRef, useState, useMemo } from 'react'
 import { useI18n } from '../i18n'
+import { getHabitIntensity, formatProgressPct } from '../lib/habitIntensity'
 
 type Props = {
   habits: Habit[]
@@ -19,26 +20,6 @@ function CellValue({ habit, value }: { habit: Habit; value: number | undefined }
   return <span>{value}</span>
 }
 
-function cellIntensity(habit: Habit, value: number | undefined): string {
-  if (value === undefined) return 'bg-gray-100 text-gray-300 hover:bg-gray-200'
-  if (habit.is_negative) {
-    if (value <= habit.goal_value) return 'bg-green-200 text-green-900 hover:bg-green-300'
-    const ratio = Math.min(value / habit.goal_value, 2)
-    if (ratio > 1.5) return 'bg-red-500 text-white hover:bg-red-600'
-    return 'bg-red-300 text-red-900 hover:bg-red-400'
-  } else {
-    if (habit.type === 'boolean') {
-      return value >= 1 ? 'bg-green-500 text-white hover:bg-green-600' : 'bg-gray-100 text-gray-300 hover:bg-gray-200'
-    }
-    const ratio = Math.min(value / habit.goal_value, 1)
-    if (ratio >= 1) return 'bg-green-500 text-white hover:bg-green-600'
-    if (ratio >= 0.66) return 'bg-green-300 text-green-900 hover:bg-green-400'
-    if (ratio >= 0.33) return 'bg-green-200 text-green-900 hover:bg-green-300'
-    if (ratio > 0) return 'bg-green-100 text-green-800 hover:bg-green-200'
-    return 'bg-gray-100 text-gray-300 hover:bg-gray-200'
-  }
-}
-
 export default function HabitTable({ habits, dates, onToggle, onDecrement }: Props) {
   const { t } = useI18n()
   const [collapsed, setCollapsed] = useState<Set<string>>(() => new Set())
@@ -50,15 +31,18 @@ export default function HabitTable({ habits, dates, onToggle, onDecrement }: Pro
       return next
     })
   }
-  // Group
-  const groups = new Map<string, Habit[]>()
-  for (const h of habits) {
-    const g = h.group_name?.trim() || t('noGroup')
-    if (!groups.has(g)) groups.set(g, [])
-    groups.get(g)!.push(h)
-  }
-  const sortedGroups = Array.from(groups.entries()).sort((a, b) => a[0].localeCompare(b[0]))
-  for (const [, list] of sortedGroups) list.sort((a, b) => a.name.localeCompare(b.name))
+  // Group — memoized (perf: avoids recompute on every render)
+  const sortedGroups = useMemo(() => {
+    const groups = new Map<string, Habit[]>()
+    for (const h of habits) {
+      const g = h.group_name?.trim() || t('noGroup')
+      if (!groups.has(g)) groups.set(g, [])
+      groups.get(g)!.push(h)
+    }
+    const sorted = Array.from(groups.entries()).sort((a, b) => a[0].localeCompare(b[0]))
+    for (const [, list] of sorted) list.sort((a, b) => a.name.localeCompare(b.name))
+    return sorted
+  }, [habits, t])
 
   // Actually dates = [J-2, Hier, Aujourd'hui] with lastNDates 3 gives ordered oldest->newest.
   // We'll display as Aujourd'hui | Hier | J-2 but simpler display in order of dates reversed? Spec: Habit | Aujourd'hui | Hier | J-2
@@ -74,10 +58,10 @@ export default function HabitTable({ habits, dates, onToggle, onDecrement }: Pro
             <span className="text-gray-500">{collapsed.has(groupName) ? '▸' : '▾'}</span>
           </button>
           {!collapsed.has(groupName) && <div className="overflow-x-auto">
-            <table className="w-full text-sm">
+            <table className="w-full text-sm" role="grid" aria-label={groupName}>
               <thead>
-                <tr className="text-xs text-gray-500 border-b">
-                  <th className="text-left px-4 py-2 sticky left-0 bg-white">{t('habit')}</th>
+                <tr className="text-xs text-gray-500 border-b" role="row">
+                  <th className="text-left px-4 py-2 sticky left-0 bg-white dark:bg-gray-800" scope="col">{t('habit')}</th>
                   {displayDates.map(d => (
                     <th key={d} className="px-3 py-2 text-center whitespace-nowrap">
                       {d === localDateStr() ? t('today') : d === localDateStr(new Date(Date.now() - 86400000)) ? t('yesterday') : t('dayMinus2')}
@@ -91,13 +75,17 @@ export default function HabitTable({ habits, dates, onToggle, onDecrement }: Pro
                   const map = new Map(habit.recent_entries?.map(e => [e.date, e.value]))
                   return (
                     <tr key={habit.id} className="border-b hover:bg-gray-50">
-                      <td className="px-4 py-2 font-medium sticky left-0 bg-white">
-                        <Link to={`/habits/${habit.id}`} className="hover:underline text-green-700 block">{habit.name}</Link>
-                        {habit.progress && (
-                          <div className={`mt-1.5 text-xs px-2 py-0.5 rounded inline-block font-mono ${habit.progress.success ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>
-                            {habit.progress.current}{habit.unit && habit.type === 'numerical' ? ' ' + habit.unit : ''} {habit.is_negative ? '≤' : '/'} {habit.progress.target}{habit.unit && habit.type === 'numerical' ? ' ' + habit.unit : ''} {habit.progress.success ? '✓' : '✗'} • {Math.round(habit.progress.percentage)}%
-                          </div>
-                        )}
+                      <td className="px-4 py-2 font-medium sticky left-0 bg-white dark:bg-gray-800">
+                        <Link to={`/habits/${habit.id}`} className="hover:underline text-green-700 dark:text-green-400 block">{habit.name}</Link>
+                        {habit.progress && (() => {
+                          const pct = formatProgressPct(habit.progress.percentage)
+                          const showOverflow = pct.actual !== Math.round(habit.progress.percentage) || pct.actual > 100 || pct.actual < 0
+                          return (
+                            <div title={showOverflow ? `${Math.round(habit.progress.percentage)}%` : undefined} className={`mt-1.5 text-xs px-2 py-0.5 rounded inline-block font-mono ${habit.progress.success ? 'bg-green-100 text-green-700 dark:bg-green-900 dark:text-green-200' : 'bg-red-100 text-red-700 dark:bg-red-900 dark:text-red-200'}`}>
+                              {habit.progress.current}{habit.unit && habit.type === 'numerical' ? ' ' + habit.unit : ''} {habit.is_negative ? '≤' : '/'} {habit.progress.target}{habit.unit && habit.type === 'numerical' ? ' ' + habit.unit : ''} {habit.progress.success ? '✓' : '✗'} • {pct.display}
+                            </div>
+                          )
+                        })()}
                       </td>
                       {displayDates.map(date => {
                         const val = map.get(date)
@@ -149,6 +137,20 @@ function CellButton({ habit, date, value, onToggle, onDecrement }: { habit: Habi
     onToggle(habit, date)
   }
 
+  const ariaLabel = `${habit.name} ${date}: ${value !== undefined ? (habit.type === 'boolean' ? (value >= 1 ? '✓' : '-') : String(value)) : t('noHabit').includes('Aucune') ? 'vide' : 'empty'}`
+  const handleKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault()
+      onToggle(habit, date)
+    } else if (e.key === '-' || e.key === '_' || e.key === 'ArrowDown') {
+      e.preventDefault()
+      onDecrement(habit, date)
+    } else if (e.key === '+' || e.key === '=' || e.key === 'ArrowUp') {
+      e.preventDefault()
+      onToggle(habit, date)
+    }
+  }
+
   return (
     <button
       onClick={onClick}
@@ -158,8 +160,13 @@ function CellButton({ habit, date, value, onToggle, onDecrement }: { habit: Habi
       onMouseDown={onPointerDown}
       onMouseUp={onPointerUp}
       onMouseLeave={onPointerUp}
+      onKeyDown={handleKeyDown}
       title={t('cellHint')}
-      className={`w-14 h-9 rounded border flex items-center justify-center select-none font-medium ${cellIntensity(habit, value)} ${isToday ? 'ring-2 ring-green-400 ring-offset-1' : ''}`}
+      aria-label={ariaLabel}
+      aria-pressed={habit.type === 'boolean' ? (value !== undefined && value >= 1) : undefined}
+      role="gridcell"
+      tabIndex={0}
+      className={`w-14 h-9 rounded border flex items-center justify-center select-none font-medium focus:outline-none focus-visible:ring-2 focus-visible:ring-green-500 focus-visible:ring-offset-1 ${getHabitIntensity(habit, value)} ${isToday ? 'ring-2 ring-green-400 ring-offset-1' : ''}`}
     >
       <CellValue habit={habit} value={value} />
     </button>

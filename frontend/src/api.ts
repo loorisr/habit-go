@@ -137,11 +137,11 @@ async function importCsv(path: string, file: File) {
     throw new Error(txt || res.statusText)
   }
   const data = await res.json() as { imported: number; errors: string[] | string }
-  // normalize errors to string for backward compat
-  if (Array.isArray(data.errors)) {
-    ;(data as any).errors = (data.errors as string[]).join('; ')
+  // keep array for callers; normalize string to array for consistency
+  if (typeof data.errors === 'string') {
+    return { imported: data.imported, errors: data.errors ? [data.errors] : [] }
   }
-  return data as { imported: number; errors: string }
+  return { imported: data.imported, errors: Array.isArray(data.errors) ? data.errors : [] }
 }
 
 export const api = {
@@ -171,11 +171,21 @@ export const api = {
   listHabits: (includeArchived = false, withEntries?: number) => {
     const q = new URLSearchParams()
     if (includeArchived) q.set('include_archived', 'true')
-    if (withEntries) q.set('with_entries', String(withEntries))
+    if (withEntries) {
+      q.set('with_entries', String(withEntries))
+      q.set('today', localDateStr(new Date()))
+    } else {
+      // still send today for progress computation to avoid server TZ divergence
+      q.set('today', localDateStr(new Date()))
+    }
     const qs = q.toString() ? '?' + q.toString() : ''
     return req<Habit[]>(`/api/habits${qs}`)
   },
-  getHabit: (id: string) => req<Habit>(`/api/habits/${id}`),
+  getHabit: (id: string) => {
+    const q = new URLSearchParams()
+    q.set('today', localDateStr(new Date()))
+    return req<Habit>(`/api/habits/${id}?${q.toString()}`)
+  },
   createHabit: (data: Partial<Habit>) => req<Habit>(`/api/habits`, { method: 'POST', body: JSON.stringify(data) }),
   updateHabit: (id: string, data: Partial<Habit>) => req<Habit>(`/api/habits/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
   archiveHabit: (id: string) => req<{ status: string }>(`/api/habits/${id}/archive`, { method: 'POST' }),
@@ -219,6 +229,6 @@ export function lastNDates(n: number, base: Date = new Date()): string[] {
   }
   return out
 }
-export function formatMonth(d: Date): string {
-  return d.toLocaleDateString('fr-FR', { month: 'long', year: 'numeric' })
+export function formatMonth(d: Date, lang: 'fr' | 'en' = 'fr'): string {
+  return d.toLocaleDateString(lang === 'en' ? 'en-US' : 'fr-FR', { month: 'long', year: 'numeric' })
 }

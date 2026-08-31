@@ -10,32 +10,28 @@ export default function HabitPage() {
   const nav = useNavigate()
   const [habit, setHabit] = useState<Habit | null>(null)
   const [entries, setEntries] = useState<Entry[]>([])
-  const [range] = useState<{ from: string; to: string }>(() => {
-    const now = new Date()
-    const from = new Date(now.getFullYear(), now.getMonth(), 1).toLocaleDateString('en-CA')
-    const to = new Date(now.getFullYear(), now.getMonth() + 1, 0).toLocaleDateString('en-CA')
-    return { from, to }
-  })
   const [editing, setEditing] = useState<{ date: string; value: number | undefined } | null>(null)
   const [editVal, setEditVal] = useState<string>('')
 
-  const load = async () => {
-    if (!id) return
-    const h = await api.getHabit(id)
-    setHabit(h)
-    const es = await api.getEntries(id, range.from, range.to)
-    setEntries(es)
-  }
-
-  useEffect(() => { load().catch(console.error) }, [id, range])
-
-  // Update range when calendar month changes? For now we fetch full month of current month only; but calendar handles navigation internally with from/to = month. We'll sync when user navigates calendar: calendar currently manages own month state; we need to fetch accordingly when month changes. Simplify: calendar will call onEdit only, and we fetch all entries from start of year? Better fetch wider: fetch entries for current displayed month on demand via handler? For now we fetch a wide range: last 60 days + next 30 to cover navigation.
-  // Workaround: initial range wide
   useEffect(() => {
     if (!id) return
-    const from = new Date(); from.setDate(from.getDate() - 60)
-    const to = new Date(); to.setDate(to.getDate() + 30)
-    api.getEntries(id, from.toLocaleDateString('en-CA'), to.toLocaleDateString('en-CA')).then(setEntries).catch(()=>{})
+    let cancelled = false
+    const load = async () => {
+      try {
+        const h = await api.getHabit(id)
+        if (cancelled) return
+        setHabit(h)
+        // wide range to cover calendar navigation (60d back, 30d forward) without double fetch race
+        const from = new Date(); from.setDate(from.getDate() - 60)
+        const to = new Date(); to.setDate(to.getDate() + 30)
+        const es = await api.getEntries(id, from.toLocaleDateString('en-CA'), to.toLocaleDateString('en-CA'))
+        if (!cancelled) setEntries(es)
+      } catch (e) {
+        console.error(e)
+      }
+    }
+    load()
+    return () => { cancelled = true }
   }, [id])
 
   const onEdit = (date: string, current?: number) => {
@@ -91,21 +87,25 @@ export default function HabitPage() {
           <div>
             <h2 className="text-xl font-bold">{habit.name}</h2>
             <div className="text-sm text-gray-500">
-              {habit.group_name || t('noGroup')} • {habit.type}
-              {habit.type === 'numerical' && habit.unit ? ` • ${t('objective')} ${habit.goal_value} ${habit.unit} ${habit.is_negative ? '≤' : '/'} ${habit.goal_period}` : ` • ${t('objective')} ${habit.goal_value} ${habit.is_negative ? '≤' : '/'} ${habit.goal_period}`}
+              {habit.group_name || t('noGroup')} • {t(habit.type) === habit.type ? habit.type : t(habit.type)}
+              {habit.type === 'numerical' && habit.unit ? ` • ${t('objective')} ${habit.goal_value} ${habit.unit} ${habit.is_negative ? '≤' : '/'} ${t(habit.goal_period)}` : ` • ${t('objective')} ${habit.goal_value} ${habit.is_negative ? '≤' : '/'} ${t(habit.goal_period)}`}
               {habit.is_negative ? ' (max)' : ''}
               {habit.type === 'numerical' && habit.unit && ` • ${t('unitLabel')} ${habit.unit}`}
             </div>
-            {habit.progress && (
-              <div className="mt-2 space-y-1">
-                <div className={`text-sm px-2 py-1 rounded inline-block ${habit.progress.success ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>
-                  {t('progress')}: {habit.progress.current}{habit.unit && habit.type === 'numerical' ? ' ' + habit.unit : ''} {habit.is_negative ? '≤' : '/'} {habit.progress.target}{habit.unit && habit.type === 'numerical' ? ' ' + habit.unit : ''} • {Math.round(habit.progress.percentage)}% {habit.progress.success ? '✓' : '✗'} ({habit.progress.period})
+            {habit.progress && (() => {
+              const p = Math.round(habit.progress.percentage)
+              const displayPct = p > 100 ? `100% (+${p - 100}%)` : p < 0 ? `0%` : `${p}%`
+              return (
+                <div className="mt-2 space-y-1">
+                  <div title={p !== Math.round(Math.min(100, Math.max(0, habit.progress.percentage))) ? `${p}%` : undefined} className={`text-sm px-2 py-1 rounded inline-block ${habit.progress.success ? 'bg-green-100 text-green-700 dark:bg-green-900 dark:text-green-200' : 'bg-red-100 text-red-700 dark:bg-red-900 dark:text-red-200'}`}>
+                    {t('progress')}: {habit.progress.current}{habit.unit && habit.type === 'numerical' ? ' ' + habit.unit : ''} {habit.is_negative ? '≤' : '/'} {habit.progress.target}{habit.unit && habit.type === 'numerical' ? ' ' + habit.unit : ''} • {displayPct} {habit.progress.success ? '✓' : '✗'} ({t(habit.progress.period) || habit.progress.period})
+                  </div>
+                  <div className="w-full max-w-xs bg-gray-200 dark:bg-gray-700 rounded-full h-2">
+                    <div className={`h-2 rounded-full ${habit.progress.success ? 'bg-green-500' : 'bg-red-500'}`} style={{ width: `${Math.min(100, Math.max(0, habit.progress.percentage))}%` }} />
+                  </div>
                 </div>
-                <div className="w-full max-w-xs bg-gray-200 rounded-full h-2">
-                  <div className={`h-2 rounded-full ${habit.progress.success ? 'bg-green-500' : 'bg-red-500'}`} style={{ width: `${Math.min(100, Math.max(0, habit.progress.percentage))}%` }} />
-                </div>
-              </div>
-            )}
+              )
+            })()}
             {habit.archived_at && <div className="text-xs text-orange-600 mt-1">{t('archived')}</div>}
           </div>
           <div className="flex gap-2">

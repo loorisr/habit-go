@@ -23,6 +23,17 @@ func NewHandler(repo *Repository, entryRepo *entry.Repository) *Handler {
 func (h *Handler) List(w http.ResponseWriter, r *http.Request) {
 	includeArchived := r.URL.Query().Get("include_archived") == "true"
 	withEntriesStr := r.URL.Query().Get("with_entries")
+	// today param allows client to send its local date to avoid TZ divergence (YYYY-MM-DD)
+	todayParam := r.URL.Query().Get("today")
+	baseNow := time.Now()
+	if todayParam != "" {
+		if t, err := time.Parse("2006-01-02", todayParam); err == nil {
+			baseNow = t
+		} else {
+			http.Error(w, "invalid today param, expected YYYY-MM-DD", 400)
+			return
+		}
+	}
 	habits, err := h.repo.List(includeArchived)
 	if err != nil {
 		http.Error(w, "internal error", 500)
@@ -34,11 +45,7 @@ func (h *Handler) List(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "invalid with_entries", 400)
 			return
 		}
-		// Need to compute date range for last n days inclusive today? Use UTC today? Frontend sends dates local, but we can compute based on server date? Better just fetch all and let frontend compute? Instead we fetch entries for each habit for last n days based on server local? But backend treats dates opaque, so must generate dates from current time using same en-CA format.
-		// We'll generate dates for last n days using now in UTC? But spec says local browser date. However bulk endpoint should accept with_entries N and compute dates as last N days from current server date (UTC) – may be off by 1 but acceptable. Alternatively we can require caller to pass from/to; but spec says with_entries=3 returns recent_entries.
-		// We'll compute today as now in local? Use time.Now() local formatted as YYYY-MM-DD and previous days.
-		// Use helper.
-		from, to, dates := lastNDates(n)
+		from, to, dates := lastNDatesFrom(baseNow, n)
 		ids := make([]string, len(habits))
 		for i, hab := range habits {
 			ids[i] = hab.ID
@@ -61,7 +68,7 @@ func (h *Handler) List(w http.ResponseWriter, r *http.Request) {
 					rec = append(rec, RecentEntry{Date: d, Value: v})
 				}
 			}
-			progress, err := h.computeProgress(&hab)
+			progress, err := h.computeProgressWithBase(&hab, baseNow)
 			if err != nil {
 				// log but still return habit without progress
 				progress = nil
@@ -78,7 +85,7 @@ func (h *Handler) List(w http.ResponseWriter, r *http.Request) {
 	// include progress for each habit (needed for weekly/monthly red coloring on main page)
 	out := []HabitWithEntries{}
 	for _, hab := range habits {
-		progress, err := h.computeProgress(&hab)
+		progress, err := h.computeProgressWithBase(&hab, baseNow)
 		if err != nil {
 			progress = nil
 		}
@@ -110,6 +117,16 @@ func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) Get(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
+	todayParam := r.URL.Query().Get("today")
+	baseNow := time.Now()
+	if todayParam != "" {
+		if t, err := time.Parse("2006-01-02", todayParam); err == nil {
+			baseNow = t
+		} else {
+			http.Error(w, "invalid today param", 400)
+			return
+		}
+	}
 	hab, err := h.repo.Get(id)
 	if err != nil {
 		http.Error(w, "internal error", 500)
@@ -120,7 +137,7 @@ func (h *Handler) Get(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// Compute progress based on goal_period rolling window
-	progress, err := h.computeProgress(hab)
+	progress, err := h.computeProgressWithBase(hab, baseNow)
 	if err != nil {
 		http.Error(w, "internal error", 500)
 		return
@@ -210,6 +227,10 @@ func jsonResponse(w http.ResponseWriter, v interface{}) {
 
 // progress computation uses entry repo rolling window
 func (h *Handler) computeProgress(hab *Habit) (*Progress, error) {
+	return h.computeProgressWithBase(hab, time.Now())
+}
+
+func (h *Handler) computeProgressWithBase(hab *Habit, base time.Time) (*Progress, error) {
 	var days int
 	switch hab.GoalPeriod {
 	case "daily":
@@ -221,7 +242,7 @@ func (h *Handler) computeProgress(hab *Habit) (*Progress, error) {
 	default:
 		days = 1
 	}
-	from, to, _ := lastNDates(days)
+	from, to, _ := lastNDatesFrom(base, days)
 	entries, err := h.entryRepo.GetRange(hab.ID, from, to)
 	if err != nil {
 		return nil, err
@@ -253,9 +274,12 @@ func (h *Handler) computeProgress(hab *Habit) (*Progress, error) {
 }
 
 func lastNDates(n int) (from, to string, dates []string) {
-	now := time.Now()
-	to = now.Format("2006-01-02")
-	fromTime := now.AddDate(0, 0, -(n - 1))
+	return lastNDatesFrom(time.Now(), n)
+}
+
+func lastNDatesFrom(base time.Time, n int) (from, to string, dates []string) {
+	to = base.Format("2006-01-02")
+	fromTime := base.AddDate(0, 0, -(n - 1))
 	from = fromTime.Format("2006-01-02")
 	for i := 0; i < n; i++ {
 		d := fromTime.AddDate(0, 0, i).Format("2006-01-02")

@@ -12,20 +12,25 @@ export default function MainPage() {
 
   const dates = useMemo(() => lastNDates(3), [])
 
-  const fetchHabits = useCallback(async () => {
-    setLoading(true)
-    setError(null)
-    try {
-      const data = await api.listHabits(includeArchived, 3)
-      setHabits(data)
-    } catch (e: any) {
-      setError(e.message)
-    } finally {
-      setLoading(false)
+  useEffect(() => {
+    let cancelled = false
+    const fetchHabits = async () => {
+      setLoading(true)
+      setError(null)
+      try {
+        const data = await api.listHabits(includeArchived, 3)
+        if (!cancelled) setHabits(data)
+      } catch (e: any) {
+        if (!cancelled && e.name !== 'AbortError') setError(e.message)
+      } finally {
+        if (!cancelled) setLoading(false)
+      }
+    }
+    fetchHabits()
+    return () => {
+      cancelled = true
     }
   }, [includeArchived])
-
-  useEffect(() => { fetchHabits() }, [fetchHabits])
 
   const getValue = (h: Habit, date: string) => h.recent_entries?.find(e => e.date === date)?.value
 
@@ -88,7 +93,7 @@ export default function MainPage() {
     }
   }
 
-  // silent refresh for progress update after optimistic mutation (no loading spinner)
+  // silent refresh for progress update after optimistic mutation (no loading spinner) — with abort guard to avoid race
   const refreshSilent = useCallback(async () => {
     try {
       const data = await api.listHabits(includeArchived, 3)
@@ -124,34 +129,39 @@ export default function MainPage() {
   ) => {
     if (!data) {
       return (
-        <div className="bg-white rounded shadow p-4 opacity-60">
+        <div className="bg-white dark:bg-gray-800 rounded shadow p-4 opacity-60">
           <div className="flex justify-between items-center mb-2">
             <span className="font-semibold text-sm">{label}</span>
             <span className="text-xs text-gray-400">{emptyMsg}</span>
           </div>
-          <div className="w-full bg-gray-200 rounded-full h-3">
-            <div className="h-3 rounded-full bg-gray-300" style={{ width: '0%' }} />
+          <div className="w-full bg-gray-200 dark:bg-gray-700 rounded-full h-3">
+            <div className="h-3 rounded-full bg-gray-300 dark:bg-gray-600" style={{ width: '0%' }} />
           </div>
-          <div className="text-xs text-gray-400 mt-1">{t('noHabit')}</div>
+          <div className="text-xs text-gray-400 mt-1 flex items-center justify-between">
+            <span>{t('noHabit')}</span>
+            <a href="/habits/new" className="text-green-600 dark:text-green-400 underline text-xs">{t('create')}</a>
+          </div>
         </div>
       )
     }
+    const avgDisplay = Math.round(data.avgPercentage) > 100 ? `100% (+${Math.round(data.avgPercentage) - 100}%)` : `${Math.round(data.avgPercentage)}%`
+    const cumulDisplay = Math.round(data.cumulPercentage) > 100 ? `100% (+${Math.round(data.cumulPercentage) - 100}%)` : `${Math.round(data.cumulPercentage)}%`
     return (
-      <div className="bg-white rounded shadow p-4">
+      <div className="bg-white dark:bg-gray-800 rounded shadow p-4">
         <div className="flex justify-between items-center mb-2">
           <span className="font-semibold text-sm">{label}</span>
-          <span className="text-xs text-gray-500">
-            {data.successCount}/{data.total} {t('succeeded')} • {Math.round(data.avgPercentage)}% {t('avg')}
+          <span className="text-xs text-gray-500 dark:text-gray-400" title={Math.round(data.avgPercentage) !== Math.round(Math.min(100, data.avgPercentage)) ? `${Math.round(data.avgPercentage)}%` : undefined}>
+            {data.successCount}/{data.total} {t('succeeded')} • {avgDisplay} {t('avg')}
           </span>
         </div>
-        <div className="w-full bg-gray-200 rounded-full h-3">
+        <div className="w-full bg-gray-200 dark:bg-gray-700 rounded-full h-3">
           <div
             className={`h-3 rounded-full transition-all ${data.successRate === 100 ? 'bg-green-500' : data.successRate >= 50 ? 'bg-yellow-500' : 'bg-red-500'}`}
             style={{ width: `${Math.min(100, Math.max(0, data.successRate))}%` }}
           />
         </div>
-        <div className="flex justify-between text-xs text-gray-400 mt-1">
-          <span>{t('cumul')}: {Number.isInteger(data.sumCurrent) ? data.sumCurrent : data.sumCurrent.toFixed(1)} / {Number.isInteger(data.sumTarget) ? data.sumTarget : data.sumTarget.toFixed(1)} ({Math.round(data.cumulPercentage)}%)</span>
+        <div className="flex justify-between text-xs text-gray-400 dark:text-gray-500 mt-1">
+          <span title={Math.round(data.cumulPercentage) !== Math.round(Math.min(100, data.cumulPercentage)) ? `${Math.round(data.cumulPercentage)}%` : undefined}>{t('cumul')}: {Number.isInteger(data.sumCurrent) ? data.sumCurrent : data.sumCurrent.toFixed(1)} / {Number.isInteger(data.sumTarget) ? data.sumTarget : data.sumTarget.toFixed(1)} ({cumulDisplay})</span>
           <span>{data.successRate === 100 ? t('allSucceeded') : data.successRate >= 50 ? t('inProgress') : t('toImprove')}</span>
         </div>
       </div>
