@@ -94,10 +94,10 @@ export default function HabitPage() {
             </div>
             {habit.progress && (() => {
               const p = Math.round(habit.progress.percentage)
-              const displayPct = p > 100 ? `100% (+${p - 100}%)` : p < 0 ? `0%` : `${p}%`
+              const displayPct = p < 0 ? `0%` : `${p}%`
               return (
                 <div className="mt-2 space-y-1">
-                  <div title={p !== Math.round(Math.min(100, Math.max(0, habit.progress.percentage))) ? `${p}%` : undefined} className={`text-sm px-2 py-1 rounded inline-block ${habit.progress.success ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>
+                  <div className={`text-sm px-2 py-1 rounded inline-block ${habit.progress.success ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>
                     {t('progress')}: {habit.progress.current}{habit.unit && habit.type === 'numerical' ? ' ' + habit.unit : ''} {habit.is_negative ? '≤' : '/'} {habit.progress.target}{habit.unit && habit.type === 'numerical' ? ' ' + habit.unit : ''} • {displayPct} {habit.progress.success ? '✓' : '✗'} ({t(habit.progress.period) || habit.progress.period})
                   </div>
                   <div className="w-full max-w-xs bg-gray-200 rounded-full h-2">

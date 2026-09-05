@@ -85,9 +85,8 @@ export default function HabitTable({ habits, dates, onToggle, onDecrement }: Pro
                         <Link to={`/habits/${habit.id}`} className="hover:underline text-green-700 block">{habit.name}</Link>
                         {habit.progress && (() => {
                           const pct = formatProgressPct(habit.progress.percentage)
-                          const showOverflow = pct.actual !== Math.round(habit.progress.percentage) || pct.actual > 100 || pct.actual < 0
                           return (
-                            <div title={showOverflow ? `${Math.round(habit.progress.percentage)}%` : undefined} className={`mt-1.5 text-xs px-2 py-0.5 rounded inline-block font-mono ${habit.progress.success ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>
+                            <div className={`mt-1.5 text-xs px-2 py-0.5 rounded inline-block font-mono ${habit.progress.success ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>
                               {habit.progress.current}{habit.unit && habit.type === 'numerical' ? ' ' + habit.unit : ''} {habit.is_negative ? '≤' : '/'} {habit.progress.target}{habit.unit && habit.type === 'numerical' ? ' ' + habit.unit : ''} {habit.progress.success ? '✓' : '✗'} • {pct.display}
                             </div>
                           )

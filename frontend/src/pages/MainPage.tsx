@@ -144,13 +144,13 @@ export default function MainPage() {
         </div>
       )
     }
-    const avgDisplay = Math.round(data.avgPercentage) > 100 ? `100% (+${Math.round(data.avgPercentage) - 100}%)` : `${Math.round(data.avgPercentage)}%`
-    const cumulDisplay = Math.round(data.cumulPercentage) > 100 ? `100% (+${Math.round(data.cumulPercentage) - 100}%)` : `${Math.round(data.cumulPercentage)}%`
+    const avgDisplay = `${Math.round(data.avgPercentage)}%`
+    const cumulDisplay = `${Math.round(data.cumulPercentage)}%`
     return (
       <div className="bg-white rounded shadow p-4">
         <div className="flex justify-between items-center mb-2">
           <span className="font-semibold text-sm">{label}</span>
-          <span className="text-xs text-gray-500" title={Math.round(data.avgPercentage) !== Math.round(Math.min(100, data.avgPercentage)) ? `${Math.round(data.avgPercentage)}%` : undefined}>
+          <span className="text-xs text-gray-500">
             {data.successCount}/{data.total} {t('succeeded')} • {avgDisplay} {t('avg')}
           </span>
         </div>
@@ -161,7 +161,7 @@ export default function MainPage() {
           />
         </div>
         <div className="flex justify-between text-xs text-gray-400 mt-1">
-          <span title={Math.round(data.cumulPercentage) !== Math.round(Math.min(100, data.cumulPercentage)) ? `${Math.round(data.cumulPercentage)}%` : undefined}>{t('cumul')}: {Number.isInteger(data.sumCurrent) ? data.sumCurrent : data.sumCurrent.toFixed(1)} / {Number.isInteger(data.sumTarget) ? data.sumTarget : data.sumTarget.toFixed(1)} ({cumulDisplay})</span>
+          <span>{t('cumul')}: {Number.isInteger(data.sumCurrent) ? data.sumCurrent : data.sumCurrent.toFixed(1)} / {Number.isInteger(data.sumTarget) ? data.sumTarget : data.sumTarget.toFixed(1)} ({cumulDisplay})</span>
           <span>{data.successRate === 100 ? t('allSucceeded') : data.successRate >= 50 ? t('inProgress') : t('toImprove')}</span>
         </div>
       </div>

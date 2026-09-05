@@ -30,7 +30,6 @@ export function getHabitIntensity(habit: Habit, value: number | undefined): stri
 
 export function formatProgressPct(p: number): { display: string; actual: number } {
   const r = Math.round(p)
-  if (r > 100) return { display: `100% (+${r - 100}%)`, actual: r }
   if (r < 0) return { display: `0%`, actual: r }
   return { display: `${r}%`, actual: r }
 }
