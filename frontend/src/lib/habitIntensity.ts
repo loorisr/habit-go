@@ -11,8 +11,8 @@ export function getHabitIntensity(habit: Habit, value: number | undefined): stri
     if (habit.type === 'boolean') {
       return value >= 1 ? 'bg-red-500 text-white hover:bg-red-600 border-red-600' : 'bg-green-200 text-green-900 hover:bg-green-300 border-green-300'
     }
-    if (value <= habit.goal_value) return 'bg-green-200 text-green-900 hover:bg-green-300 border-green-300'
-    const ratio = Math.min(value / habit.goal_value, 2)
+    if (value < 1) return 'bg-green-200 text-green-900 hover:bg-green-300 border-green-300'
+    const ratio = habit.goal_value > 0 ? Math.min(value / habit.goal_value, 2) : 2
     if (ratio > 1.5) return 'bg-red-500 text-white hover:bg-red-600 border-red-600'
     return 'bg-red-300 text-red-900 hover:bg-red-400 border-red-400'
   } else {
