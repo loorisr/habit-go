@@ -85,9 +85,14 @@ export default function HabitTable({ habits, dates, onToggle, onDecrement }: Pro
                         <Link to={`/habits/${habit.id}`} className="hover:underline text-green-700 block">{habit.name}</Link>
                         {habit.progress && (() => {
                           const pct = formatProgressPct(habit.progress.percentage)
+                          const periodKey = habit.progress.period || habit.goal_period
+                          const periodLabel = t(periodKey) || periodKey
+                          const longKey = `${periodKey}Long`
+                          const longLabel = t(longKey)
+                          const title = longLabel !== longKey ? longLabel : periodLabel
                           return (
-                            <div className={`mt-1.5 text-xs px-2 py-0.5 rounded inline-block font-mono ${habit.progress.success ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>
-                              {habit.progress.current}{habit.unit && habit.type === 'numerical' ? ' ' + habit.unit : ''} {habit.is_negative ? '≤' : '/'} {habit.progress.target}{habit.unit && habit.type === 'numerical' ? ' ' + habit.unit : ''} {habit.progress.success ? '✓' : '✗'} • {pct.display}
+                            <div title={title} className={`mt-1.5 text-xs px-2 py-0.5 rounded inline-block font-mono ${habit.progress.success ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>
+                              {habit.progress.current}{habit.unit && habit.type === 'numerical' ? ' ' + habit.unit : ''} {habit.is_negative ? '≤' : '/'} {habit.progress.target}{habit.unit && habit.type === 'numerical' ? ' ' + habit.unit : ''} • {pct.display} • {periodLabel}
                             </div>
                           )
                         })()}

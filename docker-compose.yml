@@ -13,7 +13,7 @@ services:
       PASSWORD: ${PASSWORD:-}
       # also supported: APP_PASSWORD, HABIT_PASSWORD
     volumes:
-      - ./data:/app/data
+      - habit-data:/app/data
     restart: unless-stopped
     read_only: true
     cap_drop:
@@ -26,6 +26,6 @@ services:
     healthcheck:
       test: ["NONE"]
 
-# volumes:
-#   habit-data:
-#     driver: local
+volumes:
+   habit-data:
+     driver: local
