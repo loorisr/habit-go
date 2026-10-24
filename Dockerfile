@@ -10,7 +10,7 @@ COPY frontend ./
 RUN npm run build
 
 # Stage 2: build Go binary (embeds frontend/dist)
-FROM golang:1.27-alpine AS go-builder
+FROM golang:1-alpine AS go-builder
 ENV GOTOOLCHAIN=auto
 WORKDIR /app
 # dependencies first for better caching
