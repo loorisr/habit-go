@@ -34,13 +34,14 @@ export default function AdminPage() {
     setError(null)
     try {
       const res = kind === 'habits' ? await api.importHabits(file) : await api.importEntries(file)
+      const label = t(kind === 'habits' ? 'importHabitsBtn' : 'importEntriesBtn')
       const errs = (res as any)?.errors
       const hasErrors = Array.isArray(errs) ? errs.length > 0 : !!errs
       if (hasErrors) {
         const errStr = Array.isArray(errs) ? errs.join('; ') : String(errs)
-        setMsg(`Import ${kind}: ${res.imported} ${t('imported')}. ${t('errors')}: ${errStr}`)
+        setMsg(`${label}: ${res.imported} ${t('imported')}. ${t('errors')}: ${errStr}`)
       } else {
-        setMsg(`Import ${kind}: ${res.imported} ${t('importSuccess')}`)
+        setMsg(`${label}: ${res.imported} ${t('importSuccess')}`)
       }
     } catch (err: any) {
       setError(err.message || t('importError'))
@@ -87,7 +88,7 @@ export default function AdminPage() {
       <div className="bg-white rounded shadow p-4 space-y-4">
         <h3 className="font-semibold">{t('import')}</h3>
         <p className="text-sm text-gray-500">
-          {t('importDescPrefix')} <code className="bg-gray-100 px-1 rounded">id</code> {t('importDescMid')} <code className="bg-gray-100 px-1 rounded">name</code>. {t('importDescEntries')} <code className="bg-gray-100 px-1 rounded">habit_id</code> (ou <code className="bg-gray-100 px-1 rounded">habit_name</code>) + <code className="bg-gray-100 px-1 rounded">date</code>.
+          {t('importDescPrefix')} <code className="bg-gray-100 px-1 rounded">id</code> {t('importDescMid')} <code className="bg-gray-100 px-1 rounded">name</code>. {t('importDescEntries')} <code className="bg-gray-100 px-1 rounded">habit_id</code> ({t('orWord')} <code className="bg-gray-100 px-1 rounded">habit_name</code>) + <code className="bg-gray-100 px-1 rounded">date</code>.
         </p>
         <p className="text-xs text-gray-400">
           {t('formatDetails')} <code>docs/IMPORT_FORMAT.md</code>

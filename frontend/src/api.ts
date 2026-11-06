@@ -83,7 +83,8 @@ async function req<T>(path: string, opts?: RequestInit): Promise<T> {
     res = await fetch(BASE + path, { ...opts, headers, signal: controller.signal })
   } catch (e: any) {
     clearTimeout(timeout)
-    if (e?.name === 'AbortError') throw new Error('Timeout - serveur injoignable')
+    // status 0 = no answer from the server; pages translate it (networkError)
+    if (e?.name === 'AbortError') throw new ApiError('timeout', 0)
     throw e
   }
   clearTimeout(timeout)

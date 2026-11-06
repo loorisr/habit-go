@@ -1,6 +1,6 @@
 import { useEffect, useState, useCallback, useMemo, useRef } from 'react'
 import { Link } from 'react-router-dom'
-import { api, Habit, lastNDates, localDateStr } from '../api'
+import { api, ApiError, Habit, lastNDates, localDateStr } from '../api'
 import HabitTable from '../components/HabitTable'
 import { useI18n } from '../i18n'
 
@@ -34,7 +34,7 @@ export default function MainPage() {
         const data = await api.listHabits(includeArchived, 3)
         if (!cancelled) setHabits(Array.isArray(data) ? data : [])
       } catch (e: any) {
-        if (!cancelled && e.name !== 'AbortError') setError(e.message)
+        if (!cancelled && e.name !== 'AbortError') setError(e instanceof ApiError && e.status === 0 ? t('networkError') : e.message)
       } finally {
         if (!cancelled) setLoading(false)
       }

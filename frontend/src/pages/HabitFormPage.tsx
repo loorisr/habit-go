@@ -1,10 +1,12 @@
 import { useEffect, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
-import { api } from '../api'
+import { api, ApiError } from '../api'
 import { useI18n } from '../i18n'
 
 export default function HabitFormPage() {
   const { t } = useI18n()
+  const errorText = (e: unknown) =>
+    e instanceof ApiError && e.status === 0 ? t('networkError') : e instanceof Error ? e.message : String(e)
   const { id } = useParams()
   const isEdit = !!id
   const nav = useNavigate()
@@ -25,7 +27,7 @@ export default function HabitFormPage() {
         setForm({ name: h.name, group_name: h.group_name, type: h.type, goal_value: h.goal_value, goal_period: h.goal_period, is_negative: h.is_negative, unit: h.unit || '' })
         setGoalText(String(h.goal_value))
         setLoading(false)
-      }).catch(e => { setError(e.message); setLoading(false) })
+      }).catch(e => { setError(errorText(e)); setLoading(false) })
     }
   }, [id])
 
@@ -43,7 +45,7 @@ export default function HabitFormPage() {
       if (isEdit && id) await api.updateHabit(id, payload as any)
       else await api.createHabit(payload as any)
       nav('/')
-    } catch (e: any) { setError(e.message) }
+    } catch (e: unknown) { setError(errorText(e)) }
   }
 
   if (loading) return <div className="py-10 text-center">{t('loading')}</div>
