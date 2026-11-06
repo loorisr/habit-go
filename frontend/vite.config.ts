@@ -26,14 +26,18 @@ export default defineConfig({
         clientsClaim: true,
         skipWaiting: true,
         navigateFallback: '/index.html',
+        // B7: the API is never a navigation target
+        navigateFallbackDenylist: [/^\/api\//],
         runtimeCaching: [
           {
-            urlPattern: /^https?:\/\/.*\/api\/.*$/i,
+            // B7: auth status and exports are never cached; other API answers expire after a week
+            urlPattern: /^https?:\/\/.*\/api\/(?!auth\/|export\/).*$/i,
             handler: 'NetworkFirst',
             method: 'GET',
             options: {
               cacheName: 'api-cache',
               networkTimeoutSeconds: 10,
+              expiration: { maxEntries: 50, maxAgeSeconds: 60 * 60 * 24 * 7 },
               cacheableResponse: { statuses: [200] }
             }
           },

@@ -1,7 +1,10 @@
 package db
 
 import (
+	"crypto/rand"
 	"database/sql"
+	"encoding/hex"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -76,6 +79,10 @@ func Migrate(db *sql.DB) error {
 		);`,
 		`CREATE INDEX IF NOT EXISTS idx_entries_habit_date ON entries(habit_id, date);`,
 		`CREATE INDEX IF NOT EXISTS idx_entries_date ON entries(date);`,
+		`CREATE TABLE IF NOT EXISTS settings (
+			key TEXT PRIMARY KEY,
+			value TEXT NOT NULL
+		);`,
 	}
 	tx, err := db.Begin()
 	if err != nil {
@@ -123,6 +130,27 @@ func migrateNegativeZeroGoal(db *sql.DB) error {
 		return err
 	}
 	return tx.Commit()
+}
+
+// AppSecret returns the persistent key used to derive session tokens (B2).
+// It is created on first use. Changing it logs every session out.
+func AppSecret(db *sql.DB) ([]byte, error) {
+	var v string
+	err := db.QueryRow(`SELECT value FROM settings WHERE key='app_secret'`).Scan(&v)
+	if err == nil {
+		return hex.DecodeString(v)
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return nil, err
+	}
+	secret := make([]byte, 32)
+	if _, err := rand.Read(secret); err != nil {
+		return nil, err
+	}
+	if _, err := db.Exec(`INSERT INTO settings (key, value) VALUES ('app_secret', ?)`, hex.EncodeToString(secret)); err != nil {
+		return nil, err
+	}
+	return secret, nil
 }
 
 func isDuplicateColumnError(err error) bool {

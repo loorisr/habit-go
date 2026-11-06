@@ -7,7 +7,7 @@ import AdminPage from './pages/AdminPage'
 import LoginPage from './pages/LoginPage'
 import OfflineBanner from './components/OfflineBanner'
 import ErrorBoundary from './components/ErrorBoundary'
-import { api, clearAuthToken, getAuthToken } from './api'
+import { api, clearAuthToken } from './api'
 import { LanguageProvider, useI18n } from './i18n'
 
 function AppInner() {
@@ -37,13 +37,6 @@ function AppInner() {
     window.addEventListener('auth:unauthorized', onUnauth)
     return () => window.removeEventListener('auth:unauthorized', onUnauth)
   }, [])
-
-  // clear stale token when server says not authenticated (side-effect outside render)
-  useEffect(() => {
-    if (auth?.protected && !auth.authenticated && getAuthToken()) {
-      clearAuthToken()
-    }
-  }, [auth])
 
   const handleLogin = async () => {
     await checkAuth()

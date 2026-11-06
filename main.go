@@ -1,11 +1,7 @@
 package main
 
 import (
-	"crypto/sha256"
-	"crypto/subtle"
 	"embed"
-	"encoding/hex"
-	"encoding/json"
 	"flag"
 	"io/fs"
 	"log"
@@ -56,15 +52,12 @@ func main() {
 	if port == "" {
 		port = "8080"
 	}
-
-	// Compute expected token (sha256 hex of password) if protection enabled
-	var expectedToken string
-	if password != "" {
-		h := sha256.Sum256([]byte(password))
-		expectedToken = hex.EncodeToString(h[:])
-		log.Printf("Password protection ENABLED")
-	} else {
-		log.Printf("Password protection DISABLED (no password set)")
+	trustProxy := os.Getenv("TRUST_PROXY") == "true"
+	corsAllowed := map[string]bool{}
+	for _, o := range strings.Split(os.Getenv("CORS_ORIGINS"), ",") {
+		if o = strings.TrimSpace(o); o != "" {
+			corsAllowed[o] = true
+		}
 	}
 
 	database, err := db.Open(dbPath)
@@ -72,6 +65,18 @@ func main() {
 		log.Fatalf("db open: %v", err)
 	}
 	defer database.Close()
+
+	auth := &authConfig{password: password, trustProxy: trustProxy, limiter: newLoginLimiter()}
+	if auth.protected() {
+		secret, err := db.AppSecret(database)
+		if err != nil {
+			log.Fatalf("app secret: %v", err)
+		}
+		auth.token = tokenFor(secret, password)
+		log.Printf("Password protection ENABLED")
+	} else {
+		log.Printf("Password protection DISABLED (no password set)")
+	}
 
 	habitRepo := habit.NewRepository(database)
 	entryRepo := entry.NewRepository(database)
@@ -83,9 +88,9 @@ func main() {
 	mux := http.NewServeMux()
 
 	// --- Auth routes (always public) ---
-	mux.HandleFunc("POST /api/login", loginHandler(password, expectedToken))
-	mux.HandleFunc("POST /api/logout", logoutHandler())
-	mux.HandleFunc("GET /api/auth/status", authStatusHandler(password != "", expectedToken))
+	mux.HandleFunc("POST /api/login", auth.login)
+	mux.HandleFunc("POST /api/logout", auth.logout)
+	mux.HandleFunc("GET /api/auth/status", auth.status)
 
 	// API routes
 	mux.HandleFunc("GET /api/health", habitHandler.Health)
@@ -122,7 +127,7 @@ func main() {
 
 	mux.HandleFunc("GET /", func(w http.ResponseWriter, r *http.Request) {
 		// If path starts with /api/ but not matched, 404
-		if len(r.URL.Path) >= 5 && r.URL.Path[:5] == "/api/" {
+		if strings.HasPrefix(r.URL.Path, "/api/") {
 			http.NotFound(w, r)
 			return
 		}
@@ -157,13 +162,10 @@ func main() {
 		http.NotFound(w, r)
 	})
 
-	// Wrap with maxBytes -> auth -> CORS -> logging
-	handler := loggingMiddleware(corsMiddleware(maxBytesMiddleware(authMiddleware(mux, expectedToken, password != ""))))
+	// Wrap with logging -> CORS -> body limit -> auth
+	handler := loggingMiddleware(corsMiddleware(corsAllowed, maxBytesMiddleware(auth.middleware(mux))))
 
 	log.Printf("Starting server on :%s with DB %s", port, dbPath)
-	if password != "" {
-		log.Printf(" -> Protected by password (use env PASSWORD or -password flag)")
-	}
 	srv := &http.Server{
 		Addr:         ":" + port,
 		Handler:      handler,
@@ -174,159 +176,6 @@ func main() {
 	if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		log.Fatal(err)
 	}
-}
-
-// --- Auth helpers ---
-
-func getTokenFromRequest(r *http.Request) string {
-	auth := r.Header.Get("Authorization")
-	if strings.HasPrefix(auth, "Bearer ") {
-		return strings.TrimPrefix(auth, "Bearer ")
-	}
-	if t := r.Header.Get("X-Auth-Token"); t != "" {
-		return t
-	}
-	if c, err := r.Cookie("auth_token"); err == nil {
-		return c.Value
-	}
-	return ""
-}
-
-func isAuthenticated(r *http.Request, expectedToken string) bool {
-	if expectedToken == "" {
-		return true
-	}
-	token := getTokenFromRequest(r)
-	if token == "" {
-		return false
-	}
-	// constant time compare
-	return subtle.ConstantTimeCompare([]byte(token), []byte(expectedToken)) == 1
-}
-
-func authMiddleware(next http.Handler, expectedToken string, protected bool) http.Handler {
-	if !protected {
-		return next
-	}
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// public paths that bypass auth
-		if r.URL.Path == "/api/login" || r.URL.Path == "/api/logout" || r.URL.Path == "/api/auth/status" || r.URL.Path == "/api/health" {
-			next.ServeHTTP(w, r)
-			return
-		}
-		// Only protect /api/* ; static frontend is allowed (SPA will redirect to login)
-		if !strings.HasPrefix(r.URL.Path, "/api/") {
-			next.ServeHTTP(w, r)
-			return
-		}
-		// OPTIONS preflight should also bypass? let CORS handle, but still need auth check? For simplicity allow OPTIONS without auth to avoid CORS issues.
-		if r.Method == "OPTIONS" {
-			next.ServeHTTP(w, r)
-			return
-		}
-		if !isAuthenticated(r, expectedToken) {
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(http.StatusUnauthorized)
-			json.NewEncoder(w).Encode(map[string]string{"error": "unauthorized"})
-			return
-		}
-		next.ServeHTTP(w, r)
-	})
-}
-
-func loginHandler(password, expectedToken string) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		// limit body to 4KB to prevent DoS
-		r.Body = http.MaxBytesReader(w, r.Body, 4<<10)
-		if password == "" {
-			// no protection, always success
-			w.Header().Set("Content-Type", "application/json")
-			w.Header().Set("Cache-Control", "no-store")
-			json.NewEncoder(w).Encode(map[string]interface{}{"token": "", "message": "no password protection"})
-			return
-		}
-		var body struct {
-			Password string `json:"password"`
-		}
-		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-			http.Error(w, "invalid json", http.StatusBadRequest)
-			return
-		}
-		h1 := sha256.Sum256([]byte(body.Password))
-		h2 := sha256.Sum256([]byte(password))
-		if subtle.ConstantTimeCompare(h1[:], h2[:]) != 1 {
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(http.StatusUnauthorized)
-			json.NewEncoder(w).Encode(map[string]string{"error": "invalid password"})
-			return
-		}
-		// success: set cookie and return token
-		http.SetCookie(w, &http.Cookie{
-			Name:     "auth_token",
-			Value:    expectedToken,
-			Path:     "/",
-			HttpOnly: true,
-			SameSite: http.SameSiteStrictMode,
-			MaxAge:   30 * 24 * 3600,
-		})
-		w.Header().Set("Content-Type", "application/json")
-		w.Header().Set("Cache-Control", "no-store")
-		json.NewEncoder(w).Encode(map[string]string{"token": expectedToken})
-	}
-}
-
-func logoutHandler() http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		http.SetCookie(w, &http.Cookie{
-			Name:     "auth_token",
-			Value:    "",
-			Path:     "/",
-			MaxAge:   -1,
-			HttpOnly: true,
-			SameSite: http.SameSiteStrictMode,
-		})
-		w.Header().Set("Content-Type", "application/json")
-		w.Header().Set("Cache-Control", "no-store")
-		json.NewEncoder(w).Encode(map[string]string{"status": "logged out"})
-	}
-}
-
-func authStatusHandler(protected bool, expectedToken string) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		authenticated := false
-		if !protected {
-			authenticated = true
-		} else {
-			authenticated = isAuthenticated(r, expectedToken)
-		}
-		w.Header().Set("Content-Type", "application/json")
-		w.Header().Set("Cache-Control", "no-store, max-age=0")
-		json.NewEncoder(w).Encode(map[string]interface{}{
-			"protected":     protected,
-			"authenticated": authenticated,
-		})
-	}
-}
-
-func corsMiddleware(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		origin := r.Header.Get("Origin")
-		if origin != "" {
-			w.Header().Set("Access-Control-Allow-Origin", origin)
-			w.Header().Set("Vary", "Origin")
-		} else {
-			w.Header().Set("Access-Control-Allow-Origin", "*")
-		}
-		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
-		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Auth-Token")
-		w.Header().Set("X-Content-Type-Options", "nosniff")
-		w.Header().Set("X-Frame-Options", "DENY")
-		if r.Method == "OPTIONS" {
-			w.WriteHeader(204)
-			return
-		}
-		next.ServeHTTP(w, r)
-	})
 }
 
 func maxBytesMiddleware(next http.Handler) http.Handler {

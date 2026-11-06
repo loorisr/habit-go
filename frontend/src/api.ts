@@ -25,52 +25,39 @@ export type Entry = {
 
 const BASE = (import.meta as any).env?.VITE_API_URL || ''
 
-// --- Auth token storage with remember support ---
-const TOKEN_KEY = 'auth_token'
+// --- Auth: the session is an HttpOnly cookie set by the server (B2). ---
+// The token is never kept in the browser; the "remember" choice is only a UI preference (B3).
+const LEGACY_TOKEN_KEY = 'auth_token'
 const REMEMBER_KEY = 'auth_remember'
-
-export function getAuthToken(): string | null {
-  try {
-    // sessionStorage has priority for current tab
-    return sessionStorage.getItem(TOKEN_KEY) || localStorage.getItem(TOKEN_KEY)
-  } catch { return null }
-}
 
 export function isRememberEnabled(): boolean {
   try { return localStorage.getItem(REMEMBER_KEY) === '1' } catch { return false }
 }
 
-export function setAuthToken(token: string, remember: boolean) {
-  clearAuthToken()
+export function setRememberPref(remember: boolean) {
   try {
-    if (remember) {
-      localStorage.setItem(TOKEN_KEY, token)
-      localStorage.setItem(REMEMBER_KEY, '1')
-    } else {
-      sessionStorage.setItem(TOKEN_KEY, token)
-      // remove remember flag for session mode
-      localStorage.removeItem(REMEMBER_KEY)
-    }
+    if (remember) localStorage.setItem(REMEMBER_KEY, '1')
+    else localStorage.removeItem(REMEMBER_KEY)
   } catch {}
 }
 
+// Also removes tokens stored by previous versions.
 export function clearAuthToken() {
   try {
-    localStorage.removeItem(TOKEN_KEY)
-    sessionStorage.removeItem(TOKEN_KEY)
+    localStorage.removeItem(LEGACY_TOKEN_KEY)
+    sessionStorage.removeItem(LEGACY_TOKEN_KEY)
   } catch {}
 }
 
-function authHeaders(): Record<string, string> {
-  const token = getAuthToken()
-  if (token) return { Authorization: `Bearer ${token}` }
-  return {}
+// B7: cached API answers must not outlive the session.
+async function clearApiCache() {
+  try { await caches.delete('api-cache') } catch {}
 }
 
 async function req<T>(path: string, opts?: RequestInit): Promise<T> {
   const isFormData = opts?.body instanceof FormData
   const baseHeaders: Record<string, string> = isFormData ? {} : { 'Content-Type': 'application/json' }
-  const headers: Record<string, string> = { ...baseHeaders, ...authHeaders(), ...(opts?.headers as Record<string,string> || {}) }
+  const headers: Record<string, string> = { ...baseHeaders, ...(opts?.headers as Record<string,string> || {}) }
   const controller = new AbortController()
   const timeout = setTimeout(() => controller.abort(), 15000)
   let res: Response
@@ -102,7 +89,7 @@ async function req<T>(path: string, opts?: RequestInit): Promise<T> {
 }
 
 async function downloadCsv(path: string, filename: string) {
-  const res = await fetch(BASE + path, { headers: { ...authHeaders() } })
+  const res = await fetch(BASE + path)
   if (res.status === 401) {
     try { window.dispatchEvent(new CustomEvent('auth:unauthorized')) } catch {}
     const txt = await res.text()
@@ -126,7 +113,7 @@ async function downloadCsv(path: string, filename: string) {
 async function importCsv(path: string, file: File) {
   const fd = new FormData()
   fd.append('file', file)
-  const res = await fetch(BASE + path, { method: 'POST', headers: { ...authHeaders() } as HeadersInit, body: fd })
+  const res = await fetch(BASE + path, { method: 'POST', body: fd })
   if (res.status === 401) {
     try { window.dispatchEvent(new CustomEvent('auth:unauthorized')) } catch {}
     const txt = await res.text()
@@ -147,24 +134,22 @@ async function importCsv(path: string, file: File) {
 export const api = {
   // Auth
   login: async (password: string, remember: boolean) => {
+    setRememberPref(remember)
     const res = await fetch(BASE + '/api/login', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ password }),
+      body: JSON.stringify({ password, remember }),
     })
     if (!res.ok) {
       const txt = await res.text()
       throw new Error(txt || 'Mot de passe incorrect')
     }
-    const data = await res.json() as { token: string }
-    if (data.token) {
-      setAuthToken(data.token, remember)
-    }
-    return data
+    return await res.json() as { token: string }
   },
   logout: async () => {
-    try { await fetch(BASE + '/api/logout', { method: 'POST', headers: { ...authHeaders() } }) } catch {}
+    try { await fetch(BASE + '/api/logout', { method: 'POST' }) } catch {}
     clearAuthToken()
+    await clearApiCache()
   },
   authStatus: () => req<{ protected: boolean, authenticated: boolean }>('/api/auth/status'),
 
