@@ -20,28 +20,24 @@ func Open(dbPath string) (*sql.DB, error) {
 	if err := os.MkdirAll(dir, 0700); err != nil {
 		return nil, err
 	}
-	dsn := dbPath
+	// C14: pragmas go in the DSN so every pooled connection gets them. Executed once on
+	// a single connection, foreign_keys (and so ON DELETE CASCADE) silently stopped
+	// applying as soon as database/sql opened a new connection.
+	dsn := "file:" + dbPath + "?" + strings.Join([]string{
+		"_pragma=journal_mode(WAL)",
+		"_pragma=foreign_keys(1)",
+		"_pragma=busy_timeout(5000)",
+		"_pragma=synchronous(NORMAL)",
+	}, "&")
 	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, err
 	}
-	// single connection for modernc sqlite to avoid busy errors and to keep pragmas per connection
+	// single connection for modernc sqlite to avoid busy errors
 	db.SetMaxOpenConns(1)
 	db.SetMaxIdleConns(1)
 	if err := db.Ping(); err != nil {
-		return nil, err
-	}
-	// pragmas - must be set on the single connection
-	if _, err := db.Exec(`PRAGMA journal_mode=WAL;`); err != nil {
-		return nil, err
-	}
-	if _, err := db.Exec(`PRAGMA foreign_keys=ON;`); err != nil {
-		return nil, err
-	}
-	if _, err := db.Exec(`PRAGMA busy_timeout=5000;`); err != nil {
-		return nil, err
-	}
-	if _, err := db.Exec(`PRAGMA synchronous=NORMAL;`); err != nil {
+		db.Close()
 		return nil, err
 	}
 	if err := Migrate(db); err != nil {

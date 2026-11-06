@@ -1,4 +1,5 @@
 import { useEffect, useState, useCallback, useMemo, useRef } from 'react'
+import { Link } from 'react-router-dom'
 import { api, Habit, lastNDates, localDateStr } from '../api'
 import HabitTable from '../components/HabitTable'
 import { useI18n } from '../i18n'
@@ -153,18 +154,17 @@ export default function MainPage() {
   if (loading) return <div className="py-10 text-center text-gray-400">{t('loading')}</div>
   if (error) return <div className="py-10 text-center text-red-500">{error}</div>
 
-  // global progression split by period: daily / weekly / monthly
+  // global progression split by period: daily / weekly / monthly.
+  // C5: only active positive habits count (a negative "max" percentage is not a progress),
+  // and the average is capped at 100% so one big overshoot does not hide the rest.
   const computeGlobal = (period: 'daily' | 'weekly' | 'monthly') => {
-    const filtered = habits.filter(h => h.progress && h.goal_period === period)
+    const filtered = habits.filter(h => h.progress && h.goal_period === period && !h.archived_at && !h.is_negative)
     if (filtered.length === 0) return null
     const successCount = filtered.filter(h => h.progress!.success).length
     const total = filtered.length
     const successRate = (successCount / total) * 100
-    const avgPercentage = filtered.reduce((s, h) => s + (h.progress!.percentage || 0), 0) / total
-    const sumCurrent = filtered.reduce((s, h) => s + h.progress!.current, 0)
-    const sumTarget = filtered.reduce((s, h) => s + h.progress!.target, 0)
-    const cumulPercentage = sumTarget > 0 ? (sumCurrent / sumTarget) * 100 : 0
-    return { successCount, total, successRate, avgPercentage, sumCurrent, sumTarget, cumulPercentage }
+    const avgPercentage = filtered.reduce((s, h) => s + Math.min(100, h.progress!.percentage || 0), 0) / total
+    return { successCount, total, successRate, avgPercentage }
   }
   const globalDaily = computeGlobal('daily')
   const globalWeekly = computeGlobal('weekly')
@@ -188,13 +188,12 @@ export default function MainPage() {
           </div>
           <div className="text-xs text-gray-400 mt-1 flex items-center justify-between">
             <span>{t('noHabit')}</span>
-            <a href="/habits/new" className="text-green-600 underline text-xs">{t('create')}</a>
+            <Link to="/habits/new" className="text-green-600 underline text-xs">{t('create')}</Link>
           </div>
         </div>
       )
     }
     const avgDisplay = `${Math.round(data.avgPercentage)}%`
-    const cumulDisplay = `${Math.round(data.cumulPercentage)}%`
     return (
       <div className="bg-white rounded shadow p-4">
         <div className="flex justify-between items-center mb-2">
@@ -209,8 +208,7 @@ export default function MainPage() {
             style={{ width: `${Math.min(100, Math.max(0, data.successRate))}%` }}
           />
         </div>
-        <div className="flex justify-between text-xs text-gray-400 mt-1">
-          <span>{t('cumul')}: {Number.isInteger(data.sumCurrent) ? data.sumCurrent : data.sumCurrent.toFixed(1)} / {Number.isInteger(data.sumTarget) ? data.sumTarget : data.sumTarget.toFixed(1)} ({cumulDisplay})</span>
+        <div className="flex justify-end text-xs text-gray-400 mt-1">
           <span>{data.successRate === 100 ? t('allSucceeded') : data.successRate >= 50 ? t('inProgress') : t('toImprove')}</span>
         </div>
       </div>

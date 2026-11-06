@@ -1,13 +1,16 @@
 package main
 
 import (
+	"context"
 	"embed"
 	"flag"
 	"io/fs"
 	"log"
 	"net/http"
 	"os"
+	"os/signal"
 	"strings"
+	"syscall"
 	"time"
 
 	csvhandler "habit-go/internal/csv"
@@ -173,8 +176,23 @@ func main() {
 		WriteTimeout: 15 * time.Second,
 		IdleTimeout:  60 * time.Second,
 	}
-	if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-		log.Fatal(err)
+	// C15: on SIGINT/SIGTERM finish in-flight requests, then return so the DB is closed by defer.
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	errCh := make(chan error, 1)
+	go func() { errCh <- srv.ListenAndServe() }()
+	select {
+	case err := <-errCh:
+		if err != nil && err != http.ErrServerClosed {
+			log.Fatal(err)
+		}
+	case <-ctx.Done():
+		log.Printf("shutting down")
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		if err := srv.Shutdown(shutdownCtx); err != nil {
+			log.Printf("shutdown: %v", err)
+		}
 	}
 }
 

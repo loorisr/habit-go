@@ -3,7 +3,7 @@ import type { Habit } from '../api'
 import { localDateStr } from '../api'
 import { useRef, useState, useMemo } from 'react'
 import { useI18n } from '../i18n'
-import { getHabitIntensity, formatProgressPct } from '../lib/habitIntensity'
+import { getHabitIntensity, formatProgressPct, formatNum } from '../lib/habitIntensity'
 
 type Props = {
   habits: Habit[]
@@ -58,7 +58,7 @@ export default function HabitTable({ habits, dates, onToggle, onDecrement }: Pro
             <span className="text-gray-500">{collapsed.has(groupName) ? '▸' : '▾'}</span>
           </button>
           {!collapsed.has(groupName) && <div className="overflow-x-auto">
-            <table className="w-full text-sm table-fixed" role="grid" aria-label={groupName}>
+            <table className="w-full text-sm table-fixed" aria-label={groupName}>
               <colgroup>
                 <col />
                 <col style={{ width: '88px' }} />
@@ -66,7 +66,7 @@ export default function HabitTable({ habits, dates, onToggle, onDecrement }: Pro
                 <col style={{ width: '88px' }} />
               </colgroup>
               <thead>
-                <tr className="text-xs text-gray-500 border-b" role="row">
+                <tr className="text-xs text-gray-500 border-b">
                   <th className="text-left px-4 py-2 sticky left-0 bg-white" scope="col">{t('habit')}</th>
                   {displayDates.map(d => (
                     <th key={d} className="px-2 py-2 text-center whitespace-nowrap w-[88px] min-w-[88px]">
@@ -80,9 +80,12 @@ export default function HabitTable({ habits, dates, onToggle, onDecrement }: Pro
                 {list.map(habit => {
                   const map = new Map(habit.recent_entries?.map(e => [e.date, e.value]))
                   return (
-                    <tr key={habit.id} className="border-b hover:bg-gray-50">
+                    <tr key={habit.id} className={`border-b hover:bg-gray-50 ${habit.archived_at ? 'opacity-60' : ''}`}>
                       <td className="px-4 py-2 font-medium sticky left-0 bg-white">
-                        <Link to={`/habits/${habit.id}`} className="hover:underline text-green-700 block">{habit.name}</Link>
+                        <Link to={`/habits/${habit.id}`} className="hover:underline text-green-700 block">
+                          {habit.name}
+                          {habit.archived_at && <span className="ml-1 text-xs font-normal text-orange-600">({t('archived')})</span>}
+                        </Link>
                         {habit.progress && (() => {
                           const pct = formatProgressPct(habit.progress.percentage)
                           const periodKey = habit.progress.period || habit.goal_period
@@ -92,7 +95,7 @@ export default function HabitTable({ habits, dates, onToggle, onDecrement }: Pro
                           const title = longLabel !== longKey ? longLabel : periodLabel
                           return (
                             <div title={title} className={`mt-1.5 text-xs px-2 py-0.5 rounded inline-block font-mono ${habit.progress.success ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>
-                              {habit.progress.current}{habit.unit && habit.type === 'numerical' ? ' ' + habit.unit : ''} {habit.is_negative ? '≤' : '/'} {habit.progress.target}{habit.unit && habit.type === 'numerical' ? ' ' + habit.unit : ''} • {pct.display} • {periodLabel}
+                              {formatNum(habit.progress.current)}{habit.unit && habit.type === 'numerical' ? ' ' + habit.unit : ''} {habit.is_negative ? '≤' : '/'} {formatNum(habit.progress.target)}{habit.unit && habit.type === 'numerical' ? ' ' + habit.unit : ''} • {pct.display} • {periodLabel}
                             </div>
                           )
                         })()}
@@ -166,7 +169,7 @@ function CellButton({ habit, date, value, onToggle, onDecrement }: { habit: Habi
     onToggle(habit, date)
   }
 
-  const ariaLabel = `${habit.name} ${date}: ${value !== undefined ? (habit.type === 'boolean' ? (value >= 1 ? '✓' : '-') : String(value)) : t('noHabit').includes('Aucune') ? 'vide' : 'empty'}`
+  const ariaLabel = `${habit.name} ${date}: ${value !== undefined ? (habit.type === 'boolean' ? (value >= 1 ? '✓' : '-') : String(value)) : t('emptyCell')}`
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter' || e.key === ' ') {
       e.preventDefault()
@@ -193,7 +196,6 @@ function CellButton({ habit, date, value, onToggle, onDecrement }: { habit: Habi
       title={t('cellHint')}
       aria-label={ariaLabel}
       aria-pressed={habit.type === 'boolean' ? (value !== undefined && value >= 1) : undefined}
-      role="gridcell"
       tabIndex={0}
       className={`w-14 h-9 rounded border flex items-center justify-center select-none font-medium focus:outline-none focus-visible:ring-2 focus-visible:ring-green-500 focus-visible:ring-offset-1 ${getHabitIntensity(habit, value)} ${isToday ? 'ring-2 ring-green-400 ring-offset-1' : ''}`}
     >

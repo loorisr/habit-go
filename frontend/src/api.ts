@@ -49,6 +49,24 @@ export function clearAuthToken() {
   } catch {}
 }
 
+// C1: errors carry the HTTP status, and the server's message (JSON {"error"} or plain text).
+export class ApiError extends Error {
+  status: number
+  constructor(message: string, status: number) {
+    super(message)
+    this.status = status
+  }
+}
+
+async function errorFrom(res: Response): Promise<ApiError> {
+  const txt = await res.text()
+  try {
+    const j = JSON.parse(txt)
+    if (typeof j?.error === 'string') return new ApiError(j.error, res.status)
+  } catch {}
+  return new ApiError(txt || res.statusText, res.status)
+}
+
 // B7: cached API answers must not outlive the session.
 async function clearApiCache() {
   try { await caches.delete('api-cache') } catch {}
@@ -70,13 +88,11 @@ async function req<T>(path: string, opts?: RequestInit): Promise<T> {
   }
   clearTimeout(timeout)
   if (res.status === 401) {
-    const txt = await res.text()
     try { window.dispatchEvent(new CustomEvent('auth:unauthorized')) } catch {}
-    throw new Error(txt || 'Unauthorized (401) - veuillez vous reconnecter')
+    throw await errorFrom(res)
   }
   if (!res.ok) {
-    const txt = await res.text()
-    throw new Error(txt || res.statusText)
+    throw await errorFrom(res)
   }
   if (res.status === 204) return undefined as T
   const text = await res.text()
@@ -140,10 +156,7 @@ export const api = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ password, remember }),
     })
-    if (!res.ok) {
-      const txt = await res.text()
-      throw new Error(txt || 'Mot de passe incorrect')
-    }
+    if (!res.ok) throw await errorFrom(res)
     return await res.json() as { token: string }
   },
   logout: async () => {

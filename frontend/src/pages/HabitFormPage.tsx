@@ -9,6 +9,8 @@ export default function HabitFormPage() {
   const isEdit = !!id
   const nav = useNavigate()
   const [form, setForm] = useState({ name: '', group_name: '', type: 'boolean' as 'boolean' | 'numerical', goal_value: 1, goal_period: 'daily' as 'daily' | 'weekly' | 'monthly', is_negative: false, unit: '' })
+  // C10: the goal field keeps the raw text, so it can be cleared and retyped
+  const [goalText, setGoalText] = useState('1')
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(isEdit)
   const [groups, setGroups] = useState<string[]>([])
@@ -21,6 +23,7 @@ export default function HabitFormPage() {
     if (id) {
       api.getHabit(id).then(h => {
         setForm({ name: h.name, group_name: h.group_name, type: h.type, goal_value: h.goal_value, goal_period: h.goal_period, is_negative: h.is_negative, unit: h.unit || '' })
+        setGoalText(String(h.goal_value))
         setLoading(false)
       }).catch(e => { setError(e.message); setLoading(false) })
     }
@@ -30,11 +33,15 @@ export default function HabitFormPage() {
     e.preventDefault()
     setError(null)
     if (!form.name.trim()) { setError(t('nameRequired')); return }
+    // C10: a daily yes/no habit has a goal of 1 (positive) or 0 (negative): a higher goal could never succeed
+    let goal = form.goal_value
+    if (form.type === 'boolean' && form.goal_period === 'daily') goal = form.is_negative ? 0 : 1
     // A7: goal 0 is only meaningful for "negative" habits ("zero slips")
-    if (form.goal_value < 0 || (form.goal_value === 0 && !form.is_negative)) { setError(t('goalGt0')); return }
+    if (goal < 0 || (goal === 0 && !form.is_negative)) { setError(t('goalGt0')); return }
+    const payload = { ...form, goal_value: goal }
     try {
-      if (isEdit && id) await api.updateHabit(id, form as any)
-      else await api.createHabit(form as any)
+      if (isEdit && id) await api.updateHabit(id, payload as any)
+      else await api.createHabit(payload as any)
       nav('/')
     } catch (e: any) { setError(e.message) }
   }
@@ -67,7 +74,7 @@ export default function HabitFormPage() {
           </div>
           <div>
             <label className="block text-sm font-medium">{t('goal')}</label>
-            <input type="number" step="any" className="w-full border rounded px-3 py-2" value={form.goal_value} onChange={e => setForm({ ...form, goal_value: parseFloat(e.target.value) || 0 })} />
+            <input type="number" step="any" className="w-full border rounded px-3 py-2" value={goalText} onChange={e => { setGoalText(e.target.value); setForm({ ...form, goal_value: parseFloat(e.target.value) || 0 }) }} />
           </div>
         </div>
         <div>
@@ -85,7 +92,12 @@ export default function HabitFormPage() {
           </div>
         )}
         <label className="flex items-center gap-2">
-          <input type="checkbox" checked={form.is_negative} onChange={e => setForm({ ...form, is_negative: e.target.checked, goal_value: e.target.checked ? 0 : (form.goal_value === 0 ? 1 : form.goal_value) })} />
+          <input type="checkbox" checked={form.is_negative} onChange={e => {
+            const checked = e.target.checked
+            const goal = checked ? 0 : (form.goal_value === 0 ? 1 : form.goal_value)
+            setForm({ ...form, is_negative: checked, goal_value: goal })
+            setGoalText(String(goal))
+          }} />
           <span className="text-sm">{t('negativeHabit')}</span>
         </label>
         <div className="flex gap-2">

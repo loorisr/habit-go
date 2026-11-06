@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { api, isRememberEnabled } from '../api'
+import { api, ApiError, isRememberEnabled } from '../api'
 import { useI18n } from '../i18n'
 
 type Props = { onLogin: () => void }
@@ -18,8 +18,10 @@ export default function LoginPage({ onLogin }: Props) {
     try {
       await api.login(password, remember)
       onLogin()
-    } catch (err: any) {
-      setError(err.message || 'Mot de passe incorrect')
+    } catch (err: unknown) {
+      if (err instanceof ApiError && err.status === 401) setError(t('invalidPassword'))
+      else if (err instanceof ApiError && err.status === 429) setError(t('tooManyAttempts'))
+      else setError(t('networkError'))
     } finally {
       setLoading(false)
     }

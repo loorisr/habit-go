@@ -1,4 +1,4 @@
-.PHONY: dev build frontend test clean run fmt vet install
+.PHONY: dev build frontend test clean clean-data run fmt vet install
 
 PORT ?= 8080
 DB_PATH ?= data/habits.db
@@ -35,7 +35,11 @@ fmt:
 clean:
 	rm -f habit-go
 	rm -rf frontend/dist
-	rm -rf data/*.db data/*.db-wal data/*.db-shm
+
+# C16: deleting the database is separate from clean and must be asked for explicitly
+clean-data:
+	@test "$(CONFIRM)" = "1" || (echo "Refused: this deletes your habits. Run: make clean-data CONFIRM=1" && exit 1)
+	rm -f data/*.db data/*.db-wal data/*.db-shm
 
 install:
 	cd frontend && npm install

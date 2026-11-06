@@ -1,8 +1,9 @@
 import { useEffect, useState } from 'react'
 import { useParams, Link, useNavigate } from 'react-router-dom'
-import { api, Habit, Entry } from '../api'
+import { api, ApiError, Habit, Entry } from '../api'
 import Calendar from '../components/Calendar'
 import { useI18n } from '../i18n'
+import { formatNum } from '../lib/habitIntensity'
 
 export default function HabitPage() {
   const { t } = useI18n()
@@ -10,6 +11,8 @@ export default function HabitPage() {
   const nav = useNavigate()
   const [habit, setHabit] = useState<Habit | null>(null)
   const [entries, setEntries] = useState<Entry[]>([])
+  const [loadError, setLoadError] = useState<string | null>(null)
+  const [actionError, setActionError] = useState<string | null>(null)
   const [editing, setEditing] = useState<{ date: string; value: number | undefined } | null>(null)
   const [editVal, setEditVal] = useState<string>('')
 
@@ -21,16 +24,44 @@ export default function HabitPage() {
         const h = await api.getHabit(id)
         if (cancelled) return
         setHabit(h)
-        // A6: all entries, so the calendar shows and protects every month, not only a 60-day window
+        // A6: all entries, so the calendar shows and protects every month
         const es = await api.getEntries(id)
         if (!cancelled) setEntries(es)
-      } catch (e) {
-        console.error(e)
+      } catch (e: unknown) {
+        if (cancelled) return
+        // C2: show the failure instead of "loading" forever
+        setLoadError(e instanceof ApiError && e.status === 404 ? t('habitNotFound') : t('networkError'))
       }
     }
     load()
     return () => { cancelled = true }
   }, [id])
+
+  // Escape closes the edit dialog (C9)
+  useEffect(() => {
+    if (!editing) return
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setEditing(null) }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [editing])
+
+  const reload = async () => {
+    if (!id) return
+    setEntries(await api.getEntries(id))
+    setHabit(await api.getHabit(id))
+  }
+
+  // Runs an action; on failure shows a message and returns false (C2).
+  const run = async (fn: () => Promise<void>): Promise<boolean> => {
+    setActionError(null)
+    try {
+      await fn()
+      return true
+    } catch {
+      setActionError(t('actionFailed'))
+      return false
+    }
+  }
 
   const onEdit = (date: string, current?: number) => {
     setEditing({ date, value: current })
@@ -40,46 +71,51 @@ export default function HabitPage() {
   const save = async () => {
     if (!id || !editing) return
     const v = parseFloat(editVal)
-    if (isNaN(v)) return
-    await api.upsertEntry(id, editing.date, v)
-    setEditing(null)
-    // refresh
-    const es = await api.getEntries(id)
-    setEntries(es)
-    // also reload habit progress
-    const h = await api.getHabit(id)
-    setHabit(h)
+    if (isNaN(v) || v < 0) { setActionError(t('actionFailed')); return }
+    const ok = await run(async () => {
+      await api.upsertEntry(id, editing.date, v)
+      await reload()
+    })
+    if (ok) setEditing(null)
   }
 
   const clearEntry = async () => {
     if (!id || !editing) return
-    await api.deleteEntry(id, editing.date)
-    setEditing(null)
-    const es = await api.getEntries(id)
-    setEntries(es)
-    const h = await api.getHabit(id)
-    setHabit(h)
+    const ok = await run(async () => {
+      await api.deleteEntry(id, editing.date)
+      await reload()
+    })
+    if (ok) setEditing(null)
   }
 
   const archive = async () => {
     if (!id || !habit) return
-    if (habit.archived_at) await api.restoreHabit(id)
-    else await api.archiveHabit(id)
-    const h = await api.getHabit(id)
-    setHabit(h)
+    await run(async () => {
+      if (habit.archived_at) await api.restoreHabit(id)
+      else await api.archiveHabit(id)
+      setHabit(await api.getHabit(id))
+    })
   }
 
   const hardDelete = async () => {
     if (!id) return
     if (!confirm(t('confirmDelete'))) return
-    await api.deleteHabit(id)
-    nav('/')
+    const ok = await run(() => api.deleteHabit(id))
+    if (ok) nav('/')
   }
 
+  if (loadError) {
+    return (
+      <div className="py-10 text-center text-red-500" role="alert">
+        {loadError} <Link to="/" className="text-green-600 underline">{t('backHome')}</Link>
+      </div>
+    )
+  }
   if (!habit) return <div className="py-10 text-center">{t('loading')}</div>
 
   return (
     <div className="space-y-6">
+      {actionError && !editing && <div role="alert" className="bg-red-100 text-red-700 p-2 rounded text-sm">{actionError}</div>}
       <div className="bg-white rounded shadow p-4">
         <div className="flex items-start justify-between">
           <div>
@@ -93,10 +129,11 @@ export default function HabitPage() {
             {habit.progress && (() => {
               const p = Math.round(habit.progress.percentage)
               const displayPct = p < 0 ? `0%` : `${p}%`
+              const unit = habit.unit && habit.type === 'numerical' ? ' ' + habit.unit : ''
               return (
                 <div className="mt-2 space-y-1">
                   <div className={`text-sm px-2 py-1 rounded inline-block ${habit.progress.success ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>
-                    {t('progress')}: {habit.progress.current}{habit.unit && habit.type === 'numerical' ? ' ' + habit.unit : ''} {habit.is_negative ? '≤' : '/'} {habit.progress.target}{habit.unit && habit.type === 'numerical' ? ' ' + habit.unit : ''} • {displayPct} {habit.progress.success ? '✓' : '✗'} ({t(habit.progress.period) || habit.progress.period})
+                    {t('progress')}: {formatNum(habit.progress.current)}{unit} {habit.is_negative ? '≤' : '/'} {formatNum(habit.progress.target)}{unit} • {displayPct} {habit.progress.success ? '✓' : '✗'} ({t(habit.progress.period) || habit.progress.period})
                   </div>
                   <div className="w-full max-w-xs bg-gray-200 rounded-full h-2">
                     <div className={`h-2 rounded-full ${habit.progress.success ? 'bg-green-500' : 'bg-red-500'}`} style={{ width: `${Math.min(100, Math.max(0, habit.progress.percentage))}%` }} />
@@ -118,8 +155,8 @@ export default function HabitPage() {
 
       {editing && (
         <div className="fixed inset-0 bg-black/30 flex items-center justify-center p-4 z-20">
-          <div className="bg-white rounded shadow p-4 w-full max-w-sm">
-            <h3 className="font-semibold mb-2">{t('editDate')} {editing.date}</h3>
+          <div role="dialog" aria-modal="true" aria-labelledby="edit-entry-title" className="bg-white rounded shadow p-4 w-full max-w-sm">
+            <h3 id="edit-entry-title" className="font-semibold mb-2">{t('editDate')} {editing.date}</h3>
             {habit.type === 'boolean' ? (
               <div className="space-y-3">
                 <label className="flex items-center gap-2">
@@ -135,6 +172,7 @@ export default function HabitPage() {
                 {habit.unit && <span className="text-sm text-gray-500">{habit.unit}</span>}
               </div>
             )}
+            {actionError && <div role="alert" className="bg-red-100 text-red-700 p-2 rounded text-sm mt-3">{actionError}</div>}
             <div className="flex gap-2 mt-4">
               <button onClick={save} className="bg-green-600 text-white px-3 py-1 rounded">{t('save')}</button>
               <button onClick={clearEntry} className="border px-3 py-1 rounded">{t('clear')}</button>

@@ -28,6 +28,11 @@ export function getHabitIntensity(habit: Habit, value: number | undefined): stri
   }
 }
 
+// C4: no floating-point noise in the UI (3.3000000000000003 -> 3.3)
+export function formatNum(n: number): string {
+  return String(Math.round(n * 100) / 100)
+}
+
 export function formatProgressPct(p: number): { display: string; actual: number } {
   const r = Math.round(p)
   if (r < 0) return { display: `0%`, actual: r }

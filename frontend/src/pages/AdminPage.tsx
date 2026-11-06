@@ -14,7 +14,7 @@ export default function AdminPage() {
       if (type === 'habits') await api.exportHabits()
       else await api.exportEntries()
     } catch (err: any) {
-      setError(err.message || 'Erreur export')
+      setError(err.message || t('exportError'))
     }
   }
 
@@ -43,7 +43,7 @@ export default function AdminPage() {
         setMsg(`Import ${kind}: ${res.imported} ${t('importSuccess')}`)
       }
     } catch (err: any) {
-      setError(err.message || 'Erreur import')
+      setError(err.message || t('importError'))
     } finally {
       target.value = ''
     }
@@ -90,7 +90,7 @@ export default function AdminPage() {
           {t('importDescPrefix')} <code className="bg-gray-100 px-1 rounded">id</code> {t('importDescMid')} <code className="bg-gray-100 px-1 rounded">name</code>. {t('importDescEntries')} <code className="bg-gray-100 px-1 rounded">habit_id</code> (ou <code className="bg-gray-100 px-1 rounded">habit_name</code>) + <code className="bg-gray-100 px-1 rounded">date</code>.
         </p>
         <p className="text-xs text-gray-400">
-          {t('formatDetails')} <code>IMPORT_FORMAT.md</code> {t('atRoot')}
+          {t('formatDetails')} <code>docs/IMPORT_FORMAT.md</code>
         </p>
         <div className="flex flex-wrap gap-2">
           <label className="border px-3 py-2 rounded bg-white cursor-pointer hover:bg-gray-50 text-sm">
@@ -106,10 +106,10 @@ export default function AdminPage() {
         <details className="text-sm bg-gray-50 p-3 rounded">
           <summary className="cursor-pointer font-medium">{t('previewHabits')}</summary>
           <pre className="mt-2 text-xs overflow-x-auto">
-id,name,group_name,type,goal_value,goal_period,is_negative,archived_at,created_at
-{"\n"}550e8400-...,Méditation,Bien-être,boolean,1,daily,0,,2025-01-01T08:00:00Z
-{"\n"}...,Sport,Santé,numerical,3,weekly,0,,2025-01-03T08:00:00Z
-{"\n"}...,Cigarettes,Santé,numerical,2,daily,1,,2025-01-03T08:00:00Z</pre>
+id,name,group_name,type,goal_value,goal_period,is_negative,unit,archived_at,created_at
+{"\n"}550e8400-...,Méditation,Bien-être,boolean,1,daily,0,,,2025-01-01T08:00:00Z
+{"\n"}...,Sport,Santé,numerical,3,weekly,0,km,,2025-01-03T08:00:00Z
+{"\n"}...,Cigarettes,Santé,numerical,0,daily,1,,,2025-01-03T08:00:00Z</pre>
         </details>
         <details className="text-sm bg-gray-50 p-3 rounded">
           <summary className="cursor-pointer font-medium">{t('previewEntries')}</summary>
@@ -117,7 +117,7 @@ id,name,group_name,type,goal_value,goal_period,is_negative,archived_at,created_a
 habit_id,habit_name,date,value
 {"\n"}550e8400-...,,2025-08-30,1
 {"\n"},Méditation,2025-08-29,1
-{"\n"}abc123,,2025-08-30,2</pre>
+{"\n"},Sport,2025-08-30,2</pre>
         </details>
       </div>
     </div>
