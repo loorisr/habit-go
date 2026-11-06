@@ -202,9 +202,6 @@ export const api = {
     req<void>(`/api/habits/${habitId}/entries/${date}`, { method: 'DELETE' }),
   exportHabits: () => downloadCsv('/api/export/habits', 'habits.csv'),
   exportEntries: () => downloadCsv('/api/export/entries', 'entries.csv'),
-  // keep backward compat for old callers that expected URL string
-  exportHabitsUrl: () => `${BASE}/api/export/habits`,
-  exportEntriesUrl: () => `${BASE}/api/export/entries`,
   importHabits: (file: File) => importCsv('/api/import/habits', file),
   importEntries: (file: File) => importCsv('/api/import/entries', file),
 }
@@ -226,7 +223,4 @@ export function lastNDates(n: number, base: Date = new Date()): string[] {
     out.push(localDateStr(dd))
   }
   return out
-}
-export function formatMonth(d: Date, lang: 'fr' | 'en' = 'fr'): string {
-  return d.toLocaleDateString(lang === 'en' ? 'en-US' : 'fr-FR', { month: 'long', year: 'numeric' })
 }

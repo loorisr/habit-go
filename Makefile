@@ -1,4 +1,4 @@
-.PHONY: dev build frontend test clean clean-data run fmt vet install
+.PHONY: dev build frontend ensure-dist test clean clean-data run fmt vet install
 
 PORT ?= 8080
 DB_PATH ?= data/habits.db
@@ -11,8 +11,13 @@ build: frontend
 frontend:
 	cd frontend && npm ci && npm run build
 
+# go:embed fails on a missing or empty frontend/dist: create a placeholder for dev (D1)
+ensure-dist:
+	@mkdir -p frontend/dist
+	@test -f frontend/dist/index.html || echo '<!doctype html><title>Run make frontend</title>' > frontend/dist/index.html
+
 # Dev: run Go backend and Vite frontend concurrently (frontend proxies /api to :8080)
-dev:
+dev: ensure-dist
 	@echo "Starting backend on :$(PORT) and frontend on :5173..."
 	@trap 'jobs -p | xargs -r kill' INT TERM EXIT; \
 	PORT=$(PORT) DB_PATH=$(DB_PATH) PASSWORD=$(PASSWORD) go run . & \
@@ -23,8 +28,10 @@ dev:
 run: build
 	PORT=$(PORT) DB_PATH=$(DB_PATH) ./habit-go
 
-test:
-	go test ./... -count=1 && go vet ./... && cd frontend && npm run build
+test: frontend
+	go vet ./...
+	go test ./... -count=1
+	cd frontend && npm run typecheck && npm test
 
 vet:
 	go vet ./...

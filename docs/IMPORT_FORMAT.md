@@ -21,7 +21,7 @@ id,name,group_name,type,goal_value,goal_period,is_negative,unit,archived_at,crea
 | `name` | **oui** | `string` non vide, unique recommandé | — | Nom de l'habitude. Si `id` absent ou inconnu et un habit avec ce `name` existe → **update** de ce habit (upsert par nom). |
 | `group_name` | non | `string` | `""` → affiché « Sans groupe » | Groupe libre, tri alpha côté frontend. |
 | `type` | non | `boolean` ou `numerical` | `boolean` | `boolean` = oui/non (valeur 0/1), `numerical` = compteur. |
-| `goal_value` | non | `float >0` | `1` | Objectif à atteindre. Doit être >0 côté UI mais l'import accepte `0` et le remplace par `1` si parse échoue. |
+| `goal_value` | non | `float >0` (`>=0` si `is_negative=1`) | `1` | Objectif à atteindre. Cellule vide → `1`. `0` n'est accepté que pour une habitude négative. `NaN`, `Inf`, valeurs négatives ou > 1e9 sont refusés (ligne ignorée). |
 | `goal_period` | non | `daily` / `weekly` / `monthly` | `daily` | Fenêtre glissante : `daily`=jour J, `weekly`=7 derniers jours, `monthly`=30 derniers jours. |
 | `is_negative` | non | `0`/`1` ou `true`/`false` (insensible casse) | `0` (`false`) | `1`/`true` = habitude négative : succès si `valeur ≤ objectif` (seuil max). Ex: cigarettes ≤2/jour. `0` = succès si `valeur ≥ objectif`. |
 | `unit` | non | `string` | `""` | Unité pour habitudes `numerical` (ex: `km`, `pages`, `L`, `verres`, `min`). Vide pour `boolean`. Affichée sur main page et page détail. |
@@ -36,6 +36,8 @@ id,name,group_name,type,goal_value,goal_period,is_negative,unit,archived_at,crea
 2. Sinon si name existe en DB → UPDATE WHERE name=? (premier match)
 3. Sinon → INSERT avec id fourni ou nouveau UUID
 ```
+
+> **Mise à jour partielle** : lors d'une mise à jour, seules les colonnes présentes dans l'en-tête sont modifiées ; une colonne absente garde sa valeur actuelle. Une cellule vide dans une colonne présente reprend la valeur par défaut (ex. `archived_at` vide = désarchivée).
 
 > Attention : si plusieurs habitudes ont le même `name`, l'import par `name` met à jour la première trouvée. Préférez toujours exporter puis ré-importer avec les `id`.
 
@@ -63,7 +65,7 @@ curl -X POST http://localhost:8080/api/import/habits \
   -F file=@habits.csv
 
 # réponse JSON
-{"imported":4,"errors":""}
+{"imported":4,"errors":[]}
 ```
 
 Formats acceptés : `multipart/form-data` champ `file` **ou** body brut `text/csv` (fallback `r.Body`).
@@ -118,8 +120,8 @@ curl -X POST http://localhost:8080/api/import/entries \
   -F file=@entries.csv
 
 # réponse JSON
-{"imported":4,"errors":""}
-# en cas d'erreurs partielles : {"imported":2,"errors":"habit not found: Inconnu; invalid date 2025/08/30"}
+{"imported":4,"errors":[]}
+# en cas d'erreurs partielles : {"imported":2,"errors":["line 3: habit not found: Inconnu", "line 4: invalid date 2025/08/30"]}
 ```
 
 Même fallback `multipart` vs body brut que pour habits.
@@ -128,14 +130,14 @@ Même fallback `multipart` vs body brut que pour habits.
 
 ## 3. Erreurs et retours
 
-Chaque handler renvoie `{"imported": <n>, "errors": "<msg1; msg2>"}` en `200` même si certaines lignes échouent (commit partiel en transaction). Les lignes en erreur sont ignorées, les autres sont commitées.
+Chaque handler renvoie `{"imported": <n>, "errors": ["line 3: <msg>", "line 4: <msg>"]}` en `200` même si certaines lignes échouent (commit partiel en transaction). `errors` est une **liste** ; elle est limitée à 100 entrées (puis `"... N more errors not shown"`). Les lignes en erreur sont ignorées, les autres sont commitées. Un body illisible (connexion coupée, trop gros) annule tout l'import avec `400` / `413`.
 
 **Cas d'erreur fréquents :**
 - `missing name` → `name` vide dans `habits.csv`
 - `invalid date 2025/08/30` → format doit être `YYYY-MM-DD`
 - `habit not found: X` → `habit_name` inconnu
 - `missing habit_id and habit_name` → les deux vides
-- `invalid value abc` → `value` non numérique
+- `invalid value abc` → `value` non numérique (aussi refusés : valeur négative, `NaN`, `Inf`)
 
 Consultez toujours le champ `errors` après import.
 

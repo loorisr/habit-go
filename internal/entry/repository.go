@@ -118,7 +118,3 @@ func (r *Repository) BulkGet(habitIDs []string, from, to string) (map[string][]E
 	}
 	return m, rows.Err()
 }
-
-func (r *Repository) GetByHabitDate(habitID string) ([]Entry, error) {
-	return r.GetRange(habitID, "", "")
-}

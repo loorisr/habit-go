@@ -27,7 +27,20 @@ func main() {
 	passwordFlag := flag.String("password", "", "Password for protecting access (fallback env PASSWORD)")
 	portFlag := flag.String("port", "", "Port to listen on (fallback env PORT, default 8080)")
 	dbFlag := flag.String("db", "", "SQLite DB path (fallback env DB_PATH, default data/habits.db)")
+	healthFlag := flag.Bool("healthcheck", false, "Check the running server's /api/health and exit 0 or 1")
 	flag.Parse()
+
+	if *healthFlag {
+		port := os.Getenv("PORT")
+		if port == "" {
+			port = "8080"
+		}
+		if err := checkHealth("http://127.0.0.1:" + port + "/api/health"); err != nil {
+			log.Printf("healthcheck failed: %v", err)
+			os.Exit(1)
+		}
+		os.Exit(0)
+	}
 
 	// Resolve password: flag > env PASSWORD > env APP_PASSWORD > env HABIT_PASSWORD
 	password := *passwordFlag

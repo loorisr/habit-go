@@ -35,7 +35,11 @@ PORT=8080 DB_PATH=data/habits.db ./habit-go
 Variables d'environnement:
 - `PORT` (défaut `8080`)
 - `DB_PATH` (défaut `data/habits.db`)
-- `PASSWORD` / `APP_PASSWORD` / `HABIT_PASSWORD` (si défini, protège `/api/*` par `sha256` + cookie `auth_token` + header `Authorization: Bearer`)
+- `PASSWORD` / `APP_PASSWORD` / `HABIT_PASSWORD` (si défini, protège `/api/*`). Session = cookie HttpOnly `auth_token`, token dérivé en HMAC d'un secret stocké en base. Les scripts envoient `Authorization: Bearer <token>` (token renvoyé par `POST /api/login`). Changer le secret déconnecte toutes les sessions. Login limité à 5 échecs par IP, puis blocage 15 min.
+- `TRUST_PROXY` (`true` seulement derrière un reverse proxy qui fixe `X-Forwarded-For` / `X-Forwarded-Proto` ; active aussi le cookie `Secure`)
+- `CORS_ORIGINS` (origines autorisées en cross-origin, séparées par des virgules ; vide = même origine seulement)
+
+> **Migration** : après cette version, les anciens tokens (`sha256(mot de passe)`) ne fonctionnent plus : reconnectez-vous. Une migration unique met `goal_value` à 0 pour les habitudes négatives booléennes quotidiennes (un écart est désormais un échec).
 
 ## API
 Base `/api`:
@@ -62,12 +66,12 @@ Base `/api`:
 
 Dates `YYYY-MM-DD` en locale navigateur (`localDateStr` DST-safe `12h`), stockées TEXT opaque. **`?today`** envoyé par le frontend (`localDateStr(new Date())`) évite divergence TZ serveur vs navigateur pour `with_entries` et `progress`. Frontend fallback `time.Now()` si param absent.
 
-`goal_period` glissante: `daily`=1j, `weekly`=7j, `monthly`=30j. Cumul: `count(yes)` pour `boolean`, `sum` pour `numerical`. `is_negative`: succès si `value <= goal`. `is_negative+boolean` spécialisé: `0`=vert `bg-green-200`, `>=1`=rouge `bg-red-500` (au lieu de `value<=goal` toujours vert). `percentage = current/goal*100` affiché `100% (+X%)` si overflow >100%, barre claquée à 100%.
+`goal_period` glissante: `daily`=1j, `weekly`=7j, `monthly`=30j. Cumul: `count(yes)` pour `boolean`, `sum` pour `numerical`. `is_negative`: succès si `value <= goal`. `is_negative+boolean` spécialisé: `0`=vert `bg-green-200`, `>=1`=rouge `bg-red-500` (au lieu de `value<=goal` toujours vert). `percentage = current/goal*100`, barre plafonnée à 100%. `goal_value = 0` n'est accepté que pour les habitudes négatives (zéro écart).
 
 ## Frontend
 
 ### Routes
-- `/` MainPage: groupes alpha, habits alpha, colonnes Aujourd'hui/Hier/J-2, **cases remplies** via `getHabitIntensity()` (même `bg-green-500/300/200/100` gradué que Calendar, rouge si `is_negative` dépassé), `ring-2 ring-green-400` sur `today`, clic toggle/+1, appui long 500ms / clic droit / clavier `Enter/Space` + `+/-` / `ArrowUp/Down` (-1), `role=grid` + `aria-pressed` + `focus-visible:ring`, **progression globale en 3 cartes** `Quotidienne (Daily)` / `Hebdomadaire (Weekly)` / `Mensuelle (Monthly)` (`successRate` + `avg %` + `cumul current/target`), état vide `opacity-60` + CTA `Créer` avec contraste dark mode
+- `/` MainPage: groupes alpha, habits alpha, colonnes Aujourd'hui/Hier/J-2, **cases remplies** via `getHabitIntensity()` (même `bg-green-500/300/200/100` gradué que Calendar, rouge si `is_negative` dépassé), `ring-2 ring-green-400` sur `today`, clic toggle/+1, appui long 500ms / clic droit / clavier `Enter/Space` + `+/-` / `ArrowUp/Down` (-1), `role=grid` + `aria-pressed` + `focus-visible:ring`, **progression globale en 3 cartes** `Quotidienne (Daily)` / `Hebdomadaire (Weekly)` / `Mensuelle (Monthly)` (`successRate` + `avg %` + `cumul current/target`), état vide `opacity-60` + CTA `Créer`
 - `/habits/new` & `/habits/:id/edit` HabitFormPage: datalist groupes, validation `name`/`goal_value>0`, `t('dailyLong')` etc.
 - `/habits/:id` HabitPage: header + progression rolling (`100% (+X%)` + barre), Calendar heatmap (7 colonnes Lun→Dim, `border` + `hover`), modal édition, fetch unique wide `60j back / 30j fwd` avec `cancelled` guard (fix double fetch)
 - `/admin` AdminPage: **sélecteur langue** `FR/EN` (`localStorage app_lang` + `document.documentElement.lang`), Export `habits.csv`/`entries.csv` (`downloadCsv` blob), Import multipart 10MiB, `errors: string[]` (plus de `join` côté `api.ts`), previews `details`
@@ -80,7 +84,7 @@ Dates `YYYY-MM-DD` en locale navigateur (`localDateStr` DST-safe `12h`), stocké
 `frontend/src/lib/habitIntensity.ts` **helper partagé** `getHabitIntensity(habit,value)` + `formatProgressPct(p)` utilisé par `Calendar` et `HabitTable` (DRY). `MainPage`/`HabitTable`/`HabitPage` clamp `percentage` à `100% (+X%)` avec `title` valeur réelle.
 
 ### HabitTable
-`HabitTable.tsx` : `Link block` + `mt-1.5` badge seul `current ≤/ target ✓/✗ • pct` (`bg-green-100`/`bg-red-100` + `dark:`), suppression ligne `goal_value / period` (ne garde que badge), `sortedGroups` `useMemo`, `CellButton` `getHabitIntensity` + `ring` today, `dark:bg-gray-800` sticky.
+`HabitTable.tsx` : `Link block` + `mt-1.5` badge seul `current ≤/ target ✓/✗ • pct` (`bg-green-100`/`bg-red-100`), suppression ligne `goal_value / period` (ne garde que badge), `sortedGroups` `useMemo`, `CellButton` `getHabitIntensity` + `ring` today, colonne du nom sticky.
 
 ### PWA
 `vite-plugin-pwa` `autoUpdate`, manifest `Habit Tracker` `short_name Habits`, `theme_color #22c55e`, icons `pwa-192/512` + `logo.svg` `any`, `includeAssets` `logo.svg`/`favicon-32.png`/`apple-touch-icon.png`, `NetworkFirst` `/api/*` 10s, `CacheFirst` assets 30j, banner offline `t('offline')`. `index.html` `theme-color`, `description`, `icon` `logo.svg` + `favicon-32.png` + `apple-touch-icon`.
@@ -99,14 +103,16 @@ make dev      # go run + vite dev (concurrent)
 make build    # frontend build (tsc -b && vite build) + go build -o habit-go (embed dist)
 make run      # build puis ./habit-go
 make test     # go test + go vet + vite build
-make clean    # rm binaire + frontend/dist + data/*.db*
+make clean    # rm binaire + frontend/dist
+make clean-data CONFIRM=1  # supprime la base (demande explicite, jamais dans clean)
 make vet / fmt
 ```
 
 ## Tests
 ```bash
-go test ./...      # repos habit/entry avec sqlite temp
+go test ./...      # handlers, import CSV, auth, migrations (SQLite temporaire)
 go vet ./...
+cd frontend && npm test   # Vitest (helpers de dates et d'intensité)
 curl http://localhost:8080/api/health
 curl "http://localhost:8080/api/habits?with_entries=3&today=$(date +%F)"
 ```
@@ -114,13 +120,14 @@ curl "http://localhost:8080/api/habits?with_entries=3&today=$(date +%F)"
 Checklist fonctionnelle (plan §10): booléen/numérique + positif/négatif + daily/weekly/monthly, toggle +1/-1 persistant (optimistic + revert), groupes triés, heatmap couleurs (is_negative inversé, boolean fix), édition goal, archive/restore, export/import roundtrip (`errors[]`), progression globale 3 périodes + badge unique, cases remplies, i18n FR/EN persistant, PWA `vite preview` Lighthouse >90, mobile 360px / desktop 1280px, a11y `gridcell` + clavier.
 
 ## Déploiement
-Binaire unique `habit-go` (~16MB, pure Go) embarque `frontend/dist` via `embed.FS`. Pas de CGo, `data/` gitignoré.
+Binaire unique `habit-go` (~16MB, pure Go) embarque `frontend/dist` via `embed.FS`. Pas de CGo, `data/` gitignoré. `frontend/dist` et le binaire ne sont plus versionnés : lancer `make frontend` (ou `make build`) avant `go build`. `make dev` crée un placeholder si `frontend/dist` manque.
 
 ## Docker
 ```bash
 # Build & run avec Docker (multi-stage cache: go mod download + npm ci)
 docker build -t habit-go .
-docker run -p 8080:8080 -v ./data:/app/data -e PASSWORD=test habit-go
+# le conteneur tourne en uid 65532 : utiliser un volume nommé (ou chown le dossier hôte)
+docker run -p 8080:8080 -v habit-data:/app/data -e PASSWORD=test habit-go
 
 # ou avec compose (prod)
 PASSWORD=test PORT=8080 docker compose up --build -d
@@ -129,4 +136,4 @@ PASSWORD=test PORT=8080 docker compose up --build -d
 docker compose logs -f
 docker compose down
 ```
-Compose monte `./data` en volume, expose `8080`, lit `PASSWORD`/`PORT`/`DB_PATH` depuis l'env. Healthcheck `wget --spider http://localhost:${PORT:-8080}/api/health`. Frontend builder `node:24-alpine` (`npm ci` → `npm run build`), Go builder `golang:1.27-alpine` (`CGO_ENABLED=0`).
+Compose utilise le volume nommé `habit-data`, expose `8080`, lit `PASSWORD`/`PORT`/`DB_PATH`/`TRUST_PROXY`/`CORS_ORIGINS` depuis l'env. Healthcheck : `/app/habit-go -healthcheck` (interroge `/api/health` ; l'image est `scratch`, sans shell ni wget). Frontend builder `node:24-alpine` (`npm ci` → `npm run build`), Go builder `golang:1-alpine` avec compilation croisée (`GOOS`/`GOARCH` du `TARGETPLATFORM`, `CGO_ENABLED=0`), donc pas de QEMU pour compiler en arm64. La CI ne pousse l'image qu'après les tests (`go vet`, `go test`, `npm test`, `typecheck`).
