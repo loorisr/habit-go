@@ -1,7 +1,9 @@
-import { useEffect, useState, useCallback, useMemo } from 'react'
-import { api, Habit, lastNDates } from '../api'
+import { useEffect, useState, useCallback, useMemo, useRef } from 'react'
+import { api, Habit, lastNDates, localDateStr } from '../api'
 import HabitTable from '../components/HabitTable'
 import { useI18n } from '../i18n'
+
+const cellKey = (habitId: string, date: string) => `${habitId}|${date}`
 
 export default function MainPage() {
   const { t } = useI18n()
@@ -9,8 +11,18 @@ export default function MainPage() {
   const [includeArchived, setIncludeArchived] = useState(false)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const [saveError, setSaveError] = useState<string | null>(null)
+  const [dayKey, setDayKey] = useState(() => localDateStr())
+  const dayRef = useRef(dayKey)
 
-  const dates = useMemo(() => lastNDates(3), [])
+  // A3: last value we want for each cell (more recent than the rendered state during fast clicks),
+  // the running PUT per cell, and counters that stop a stale refresh from overwriting a click.
+  const latestValues = useRef(new Map<string, number>())
+  const inFlight = useRef(new Map<string, Promise<void>>())
+  const generation = useRef(0)
+  const pendingSaves = useRef(0)
+
+  const dates = useMemo(() => lastNDates(3), [dayKey])
 
   useEffect(() => {
     let cancelled = false
@@ -19,7 +31,7 @@ export default function MainPage() {
       setError(null)
       try {
         const data = await api.listHabits(includeArchived, 3)
-        if (!cancelled) setHabits(data)
+        if (!cancelled) setHabits(Array.isArray(data) ? data : [])
       } catch (e: any) {
         if (!cancelled && e.name !== 'AbortError') setError(e.message)
       } finally {
@@ -49,57 +61,94 @@ export default function MainPage() {
     }))
   }
 
-  const handleToggle = async (habit: Habit, date: string) => {
-    const cur = getValue(habit, date)
-    let next: number | undefined
-    if (habit.type === 'boolean') {
-      next = cur && cur >= 1 ? 0 : 1
-      if (next === 0) {
-        // For boolean 0 we could delete entry or set 0; backend stores 0; but UI shows - for 0. We'll upsert 0
-        // Keep 0 as value to allow toggle; alternatively delete. Keep 0.
-      }
-    } else {
-      next = (cur ?? 0) + 1
-    }
-    // optimistic
-    optimisticUpdate(habit.id, date, next)
-    try {
-      await api.upsertEntry(habit.id, date, next!)
-    } catch (e) {
-      // revert
-      optimisticUpdate(habit.id, date, cur)
-    }
-  }
-
-  const handleDecrement = async (habit: Habit, date: string) => {
-    if (habit.type === 'boolean') {
-      // for boolean, long press could clear?
-      optimisticUpdate(habit.id, date, 0)
-      try { await api.upsertEntry(habit.id, date, 0) } catch {}
-      return
-    }
-    const cur = getValue(habit, date) ?? 0
-    const next = Math.max(0, cur - 1)
-    optimisticUpdate(habit.id, date, next)
-    try {
-      if (next === 0) {
-        // keep 0 or delete? keep 0 to show 0
-        await api.upsertEntry(habit.id, date, 0)
-      } else {
-        await api.upsertEntry(habit.id, date, next)
-      }
-    } catch {
-      optimisticUpdate(habit.id, date, cur)
-    }
-  }
-
-  // silent refresh for progress update after optimistic mutation (no loading spinner) — with abort guard to avoid race
+  // silent refresh (progress, server truth). Ignored if a click happened since it started,
+  // or while saves are pending: the last save's refresh will apply.
   const refreshSilent = useCallback(async () => {
+    const gen = generation.current
     try {
       const data = await api.listHabits(includeArchived, 3)
-      setHabits(data)
+      if (gen === generation.current && pendingSaves.current === 0) {
+        latestValues.current.clear()
+        setHabits(Array.isArray(data) ? data : [])
+      }
     } catch {}
   }, [includeArchived])
+
+  // Keep the three day columns right after midnight or when the tab comes back (A5).
+  useEffect(() => {
+    const syncDay = () => {
+      const now = localDateStr()
+      if (now !== dayRef.current) {
+        dayRef.current = now
+        setDayKey(now)
+        refreshSilent()
+      }
+    }
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') {
+        syncDay()
+        refreshSilent()
+      }
+    }
+    const timer = window.setInterval(syncDay, 60_000)
+    document.addEventListener('visibilitychange', onVisible)
+    return () => {
+      clearInterval(timer)
+      document.removeEventListener('visibilitychange', onVisible)
+    }
+  }, [refreshSilent])
+
+  // Writes for one cell are serialized: while a PUT is running, newer values are queued
+  // as "latest" and sent next, so the last click always wins.
+  const saveCell = (habitId: string, date: string, value: number): Promise<void> => {
+    const key = cellKey(habitId, date)
+    latestValues.current.set(key, value)
+    const running = inFlight.current.get(key)
+    if (running) return running
+    const run = (async () => {
+      try {
+        let sent: number
+        do {
+          sent = latestValues.current.get(key)!
+          await api.upsertEntry(habitId, date, sent)
+        } while (latestValues.current.get(key) !== sent)
+      } finally {
+        inFlight.current.delete(key)
+      }
+    })()
+    inFlight.current.set(key, run)
+    return run
+  }
+
+  const applyCell = (habit: Habit, date: string, next: number) => {
+    setSaveError(null)
+    generation.current++
+    pendingSaves.current++
+    optimisticUpdate(habit.id, date, next)
+    saveCell(habit.id, date, next)
+      .catch(() => setSaveError(t('saveError')))
+      .finally(() => {
+        pendingSaves.current--
+        refreshSilent()
+      })
+  }
+
+  const currentValue = (habit: Habit, date: string) =>
+    latestValues.current.get(cellKey(habit.id, date)) ?? getValue(habit, date)
+
+  const handleToggle = (habit: Habit, date: string) => {
+    const cur = currentValue(habit, date)
+    const next = habit.type === 'boolean'
+      ? (cur && cur >= 1 ? 0 : 1)
+      : (cur ?? 0) + 1
+    applyCell(habit, date, next)
+  }
+
+  const handleDecrement = (habit: Habit, date: string) => {
+    const cur = currentValue(habit, date) ?? 0
+    const next = habit.type === 'boolean' ? 0 : Math.max(0, cur - 1)
+    applyCell(habit, date, next)
+  }
 
   if (loading) return <div className="py-10 text-center text-gray-400">{t('loading')}</div>
   if (error) return <div className="py-10 text-center text-red-500">{error}</div>
@@ -178,6 +227,8 @@ export default function MainPage() {
         <span className="ml-auto text-xs text-gray-400">{t('tip')}</span>
       </div>
 
+      {saveError && <div role="alert" className="bg-red-100 text-red-700 p-2 rounded text-sm">{saveError}</div>}
+
       {hasAnyGlobal ? (
         <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
           {renderGlobal(`${t('globalDaily')} (${t('daily')})`, globalDaily, t('globalNoHabitDaily'))}
@@ -192,7 +243,7 @@ export default function MainPage() {
         </div>
       ) : null}
 
-      <HabitTable habits={habits} dates={dates} onToggle={async (h, d) => { await handleToggle(h, d); refreshSilent() }} onDecrement={async (h, d) => { await handleDecrement(h, d); refreshSilent() }} />
+      <HabitTable habits={habits} dates={dates} onToggle={handleToggle} onDecrement={handleDecrement} />
     </div>
   )
 }

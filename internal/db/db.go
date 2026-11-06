@@ -98,7 +98,31 @@ func Migrate(db *sql.DB) error {
 			return err
 		}
 	}
-	return nil
+	return migrateNegativeZeroGoal(db)
+}
+
+// migrateNegativeZeroGoal (A7): a daily "don't do X" boolean habit with goal >= 1 always
+// succeeds, even after a slip. Its goal becomes 0 so a slip is a failure. Runs once (user_version).
+func migrateNegativeZeroGoal(db *sql.DB) error {
+	var version int
+	if err := db.QueryRow(`PRAGMA user_version`).Scan(&version); err != nil {
+		return err
+	}
+	if version >= 1 {
+		return nil
+	}
+	tx, err := db.Begin()
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	if _, err := tx.Exec(`UPDATE habits SET goal_value=0 WHERE is_negative=1 AND type='boolean' AND goal_period='daily'`); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`PRAGMA user_version=1`); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 func isDuplicateColumnError(err error) bool {

@@ -3,8 +3,6 @@ package habit
 import (
 	"database/sql"
 	"errors"
-	"fmt"
-	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -20,8 +18,29 @@ func NewRepository(db *sql.DB) *Repository {
 	return &Repository{db: db}
 }
 
+const selectColumns = `SELECT id, name, group_name, type, goal_value, goal_period, is_negative, unit, archived_at, created_at, updated_at FROM habits`
+
+type rowScanner interface {
+	Scan(dest ...any) error
+}
+
+func scanHabit(s rowScanner) (Habit, error) {
+	var h Habit
+	var isNeg int
+	var archived sql.NullString
+	err := s.Scan(&h.ID, &h.Name, &h.GroupName, &h.Type, &h.GoalValue, &h.GoalPeriod, &isNeg, &h.Unit, &archived, &h.CreatedAt, &h.UpdatedAt)
+	if err != nil {
+		return h, err
+	}
+	h.IsNegative = isNeg != 0
+	if archived.Valid {
+		h.ArchivedAt = &archived.String
+	}
+	return h, nil
+}
+
 func (r *Repository) List(includeArchived bool) ([]Habit, error) {
-	query := `SELECT id, name, group_name, type, goal_value, goal_period, is_negative, unit, archived_at, created_at, updated_at FROM habits`
+	query := selectColumns
 	if !includeArchived {
 		query += ` WHERE archived_at IS NULL`
 	}
@@ -33,67 +52,51 @@ func (r *Repository) List(includeArchived bool) ([]Habit, error) {
 	defer rows.Close()
 	out := []Habit{}
 	for rows.Next() {
-		var h Habit
-		var isNeg int
-		var archived sql.NullString
-		var unit sql.NullString
-		if err := rows.Scan(&h.ID, &h.Name, &h.GroupName, &h.Type, &h.GoalValue, &h.GoalPeriod, &isNeg, &unit, &archived, &h.CreatedAt, &h.UpdatedAt); err != nil {
+		h, err := scanHabit(rows)
+		if err != nil {
 			return nil, err
-		}
-		h.IsNegative = isNeg != 0
-		if unit.Valid {
-			h.Unit = unit.String
-		}
-		if archived.Valid {
-			h.ArchivedAt = &archived.String
 		}
 		out = append(out, h)
 	}
 	return out, rows.Err()
 }
 
+// Get returns nil, nil when the habit does not exist.
 func (r *Repository) Get(id string) (*Habit, error) {
-	var h Habit
-	var isNeg int
-	var archived sql.NullString
-	var unit sql.NullString
-	err := r.db.QueryRow(`SELECT id, name, group_name, type, goal_value, goal_period, is_negative, unit, archived_at, created_at, updated_at FROM habits WHERE id=?`, id).
-		Scan(&h.ID, &h.Name, &h.GroupName, &h.Type, &h.GoalValue, &h.GoalPeriod, &isNeg, &unit, &archived, &h.CreatedAt, &h.UpdatedAt)
-	if err == sql.ErrNoRows {
+	h, err := scanHabit(r.db.QueryRow(selectColumns+` WHERE id=?`, id))
+	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
 	if err != nil {
 		return nil, err
 	}
-	h.IsNegative = isNeg != 0
-	if unit.Valid {
-		h.Unit = unit.String
-	}
-	if archived.Valid {
-		h.ArchivedAt = &archived.String
-	}
 	return &h, nil
 }
 
 func (r *Repository) Create(req CreateRequest) (*Habit, error) {
-	if err := validateCreate(req); err != nil {
+	f := Fields{
+		Name:       req.Name,
+		GroupName:  req.GroupName,
+		Type:       req.Type,
+		GoalValue:  req.GoalValue,
+		GoalPeriod: req.GoalPeriod,
+		IsNegative: req.IsNegative,
+		Unit:       req.Unit,
+	}.Normalize()
+	if err := f.Validate(); err != nil {
 		return nil, err
 	}
 	id := uuid.NewString()
 	now := time.Now().UTC().Format(time.RFC3339)
-	isNeg := 0
-	if req.IsNegative {
-		isNeg = 1
-	}
-	unit := strings.TrimSpace(req.Unit)
 	_, err := r.db.Exec(`INSERT INTO habits (id, name, group_name, type, goal_value, goal_period, is_negative, unit, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?)`,
-		id, strings.TrimSpace(req.Name), strings.TrimSpace(req.GroupName), req.Type, req.GoalValue, req.GoalPeriod, isNeg, unit, now, now)
+		id, f.Name, f.GroupName, f.Type, f.GoalValue, f.GoalPeriod, boolInt(f.IsNegative), f.Unit, now, now)
 	if err != nil {
 		return nil, err
 	}
 	return r.Get(id)
 }
 
+// Update merges the request into the stored habit, then validates the result as a whole (C12).
 func (r *Repository) Update(id string, req UpdateRequest) (*Habit, error) {
 	h, err := r.Get(id)
 	if err != nil {
@@ -102,62 +105,43 @@ func (r *Repository) Update(id string, req UpdateRequest) (*Habit, error) {
 	if h == nil {
 		return nil, ErrNotFound
 	}
-	name := h.Name
+	f := Fields{
+		Name:       h.Name,
+		GroupName:  h.GroupName,
+		Type:       h.Type,
+		GoalValue:  h.GoalValue,
+		GoalPeriod: h.GoalPeriod,
+		IsNegative: h.IsNegative,
+		Unit:       h.Unit,
+	}
 	if req.Name != nil {
-		name = strings.TrimSpace(*req.Name)
-		if name == "" {
-			return nil, fmt.Errorf("name required")
-		}
-		if len(name) > 100 {
-			return nil, fmt.Errorf("name too long (max 100)")
-		}
+		f.Name = *req.Name
 	}
-	group := h.GroupName
 	if req.GroupName != nil {
-		group = strings.TrimSpace(*req.GroupName)
-		if len(group) > 100 {
-			return nil, fmt.Errorf("group_name too long (max 100)")
-		}
+		f.GroupName = *req.GroupName
 	}
-	typ := h.Type
 	if req.Type != nil {
-		if *req.Type != "boolean" && *req.Type != "numerical" {
-			return nil, fmt.Errorf("invalid type")
-		}
-		typ = *req.Type
+		f.Type = *req.Type
 	}
-	goalVal := h.GoalValue
 	if req.GoalValue != nil {
-		if *req.GoalValue <= 0 {
-			return nil, fmt.Errorf("goal_value must be >0")
-		}
-		goalVal = *req.GoalValue
+		f.GoalValue = *req.GoalValue
 	}
-	goalPeriod := h.GoalPeriod
 	if req.GoalPeriod != nil {
-		if *req.GoalPeriod != "daily" && *req.GoalPeriod != "weekly" && *req.GoalPeriod != "monthly" {
-			return nil, fmt.Errorf("invalid goal_period")
-		}
-		goalPeriod = *req.GoalPeriod
+		f.GoalPeriod = *req.GoalPeriod
 	}
-	isNeg := h.IsNegative
 	if req.IsNegative != nil {
-		isNeg = *req.IsNegative
+		f.IsNegative = *req.IsNegative
 	}
-	unit := h.Unit
 	if req.Unit != nil {
-		unit = strings.TrimSpace(*req.Unit)
-		if len(unit) > 20 {
-			return nil, fmt.Errorf("unit too long (max 20)")
-		}
+		f.Unit = *req.Unit
+	}
+	f = f.Normalize()
+	if err := f.Validate(); err != nil {
+		return nil, err
 	}
 	now := time.Now().UTC().Format(time.RFC3339)
-	isNegInt := 0
-	if isNeg {
-		isNegInt = 1
-	}
 	_, err = r.db.Exec(`UPDATE habits SET name=?, group_name=?, type=?, goal_value=?, goal_period=?, is_negative=?, unit=?, updated_at=? WHERE id=?`,
-		name, group, typ, goalVal, goalPeriod, isNegInt, unit, now, id)
+		f.Name, f.GroupName, f.Type, f.GoalValue, f.GoalPeriod, boolInt(f.IsNegative), f.Unit, now, id)
 	if err != nil {
 		return nil, err
 	}
@@ -202,48 +186,9 @@ func (r *Repository) HardDelete(id string) error {
 	return nil
 }
 
-func (r *Repository) FindByName(name string) (*Habit, error) {
-	var h Habit
-	var isNeg int
-	var archived sql.NullString
-	var unit sql.NullString
-	err := r.db.QueryRow(`SELECT id, name, group_name, type, goal_value, goal_period, is_negative, unit, archived_at, created_at, updated_at FROM habits WHERE name=? LIMIT 1`, name).
-		Scan(&h.ID, &h.Name, &h.GroupName, &h.Type, &h.GoalValue, &h.GoalPeriod, &isNeg, &unit, &archived, &h.CreatedAt, &h.UpdatedAt)
-	if err == sql.ErrNoRows {
-		return nil, nil
+func boolInt(b bool) int {
+	if b {
+		return 1
 	}
-	if err != nil {
-		return nil, err
-	}
-	h.IsNegative = isNeg != 0
-	if unit.Valid {
-		h.Unit = unit.String
-	}
-	if archived.Valid {
-		h.ArchivedAt = &archived.String
-	}
-	return &h, nil
-}
-
-func validateCreate(req CreateRequest) error {
-	name := strings.TrimSpace(req.Name)
-	if name == "" {
-		return fmt.Errorf("name required")
-	}
-	if len(name) > 100 {
-		return fmt.Errorf("name too long (max 100)")
-	}
-	if len(req.Unit) > 20 {
-		return fmt.Errorf("unit too long (max 20)")
-	}
-	if req.Type != "boolean" && req.Type != "numerical" {
-		return fmt.Errorf("invalid type")
-	}
-	if req.GoalValue <= 0 || req.GoalValue > 1e9 {
-		return fmt.Errorf("goal_value must be >0")
-	}
-	if req.GoalPeriod != "daily" && req.GoalPeriod != "weekly" && req.GoalPeriod != "monthly" {
-		return fmt.Errorf("invalid goal_period")
-	}
-	return nil
+	return 0
 }

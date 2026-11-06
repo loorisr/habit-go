@@ -21,10 +21,8 @@ export default function HabitPage() {
         const h = await api.getHabit(id)
         if (cancelled) return
         setHabit(h)
-        // wide range to cover calendar navigation (60d back, 30d forward) without double fetch race
-        const from = new Date(); from.setDate(from.getDate() - 60)
-        const to = new Date(); to.setDate(to.getDate() + 30)
-        const es = await api.getEntries(id, from.toLocaleDateString('en-CA'), to.toLocaleDateString('en-CA'))
+        // A6: all entries, so the calendar shows and protects every month, not only a 60-day window
+        const es = await api.getEntries(id)
         if (!cancelled) setEntries(es)
       } catch (e) {
         console.error(e)

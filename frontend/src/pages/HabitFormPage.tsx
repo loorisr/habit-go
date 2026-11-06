@@ -30,7 +30,8 @@ export default function HabitFormPage() {
     e.preventDefault()
     setError(null)
     if (!form.name.trim()) { setError(t('nameRequired')); return }
-    if (form.goal_value <= 0) { setError(t('goalGt0')); return }
+    // A7: goal 0 is only meaningful for "negative" habits ("zero slips")
+    if (form.goal_value < 0 || (form.goal_value === 0 && !form.is_negative)) { setError(t('goalGt0')); return }
     try {
       if (isEdit && id) await api.updateHabit(id, form as any)
       else await api.createHabit(form as any)
@@ -84,7 +85,7 @@ export default function HabitFormPage() {
           </div>
         )}
         <label className="flex items-center gap-2">
-          <input type="checkbox" checked={form.is_negative} onChange={e => setForm({ ...form, is_negative: e.target.checked })} />
+          <input type="checkbox" checked={form.is_negative} onChange={e => setForm({ ...form, is_negative: e.target.checked, goal_value: e.target.checked ? 0 : (form.goal_value === 0 ? 1 : form.goal_value) })} />
           <span className="text-sm">{t('negativeHabit')}</span>
         </label>
         <div className="flex gap-2">

@@ -4,23 +4,29 @@ import (
 	"database/sql"
 	"encoding/csv"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"strconv"
 	"strings"
 	"time"
 
-	"github.com/google/uuid"
 	"habit-go/internal/habit"
+
+	"github.com/google/uuid"
 )
 
+// maxImportErrors caps the error list returned to the client (A1).
+const maxImportErrors = 100
+
 type Handler struct {
-	db        *sql.DB
-	habitRepo *habit.Repository
+	db *sql.DB
 }
 
-func NewHandler(db *sql.DB, hr *habit.Repository) *Handler {
-	return &Handler{db: db, habitRepo: hr}
+func NewHandler(db *sql.DB) *Handler {
+	return &Handler{db: db}
 }
 
 func (h *Handler) ExportHabits(w http.ResponseWriter, r *http.Request) {
@@ -123,38 +129,104 @@ func (h *Handler) ExportEntries(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (h *Handler) ImportHabits(w http.ResponseWriter, r *http.Request) {
+// importInput is the CSV source of an import request: multipart "file" or raw body.
+type importInput struct {
+	reader *csv.Reader
+	header []string
+	idx    map[string]int
+	close  func()
+}
+
+func newImportInput(w http.ResponseWriter, r *http.Request) (*importInput, bool) {
 	if err := r.ParseMultipartForm(10 << 20); err != nil && err != http.ErrNotMultipart {
-		http.Error(w, "invalid multipart", 400)
-		return
+		http.Error(w, "invalid multipart", http.StatusBadRequest)
+		return nil, false
 	}
-	var reader *csv.Reader
-	file, _, err := r.FormFile("file")
-	if err == nil {
-		defer file.Close()
-		reader = csv.NewReader(file)
-	} else {
-		reader = csv.NewReader(r.Body)
+	var src io.Reader = r.Body
+	closeFn := func() {}
+	if f, _, err := r.FormFile("file"); err == nil {
+		src = f
+		closeFn = func() { f.Close() }
 	}
+	reader := csv.NewReader(src)
 	reader.TrimLeadingSpace = true
 	reader.FieldsPerRecord = -1
 	header, err := reader.Read()
 	if err != nil {
-		http.Error(w, "invalid csv header", 400)
-		return
+		closeFn()
+		http.Error(w, "invalid csv header", http.StatusBadRequest)
+		return nil, false
 	}
-	// strip BOM
 	if len(header) > 0 {
 		header[0] = strings.TrimPrefix(header[0], "\xEF\xBB\xBF")
 	}
-	idx := headerIndex(header)
-	// validate required columns
-	if _, ok := idx["name"]; !ok {
-		http.Error(w, "missing name column", 400)
+	return &importInput{reader: reader, header: header, idx: headerIndex(header), close: closeFn}, true
+}
+
+// nextRecord returns the next record with its line number. Malformed lines are
+// recorded in errs and skipped. A failing body (client gone, size limit) is
+// returned as fatal: the reader would keep returning the same error forever (A1).
+func (in *importInput) nextRecord(errs *errList) (rec []string, line int, done bool, fatal error) {
+	for {
+		record, err := in.reader.Read()
+		if err == io.EOF {
+			return nil, 0, true, nil
+		}
+		if err == nil {
+			l, _ := in.reader.FieldPos(0)
+			return record, l, false, nil
+		}
+		var pe *csv.ParseError
+		if errors.As(err, &pe) {
+			errs.add("line %d: %v", pe.Line, pe.Err)
+			continue
+		}
+		return nil, 0, false, err
+	}
+}
+
+func writeReadError(w http.ResponseWriter, err error) {
+	var mbe *http.MaxBytesError
+	if errors.As(err, &mbe) {
+		http.Error(w, "file too large", http.StatusRequestEntityTooLarge)
 		return
 	}
-	count := 0
-	errorsArr := []string{}
+	http.Error(w, "read error", http.StatusBadRequest)
+}
+
+// errList keeps at most maxImportErrors messages.
+type errList struct {
+	msgs    []string
+	dropped int
+}
+
+func (e *errList) add(format string, args ...any) {
+	if len(e.msgs) >= maxImportErrors {
+		e.dropped++
+		return
+	}
+	e.msgs = append(e.msgs, fmt.Sprintf(format, args...))
+}
+
+func (e *errList) result() []string {
+	out := make([]string, len(e.msgs), len(e.msgs)+1)
+	copy(out, e.msgs)
+	if e.dropped > 0 {
+		out = append(out, fmt.Sprintf("... %d more errors not shown", e.dropped))
+	}
+	return out
+}
+
+func (h *Handler) ImportHabits(w http.ResponseWriter, r *http.Request) {
+	in, ok := newImportInput(w, r)
+	if !ok {
+		return
+	}
+	defer in.close()
+	if _, ok := in.idx["name"]; !ok {
+		http.Error(w, "missing name column", http.StatusBadRequest)
+		return
+	}
 	tx, err := h.db.Begin()
 	if err != nil {
 		http.Error(w, "db begin failed", 500)
@@ -162,125 +234,118 @@ func (h *Handler) ImportHabits(w http.ResponseWriter, r *http.Request) {
 	}
 	defer func() { _ = tx.Rollback() }()
 
+	now := time.Now().UTC().Format(time.RFC3339)
+	count := 0
+	var errs errList
 	for {
-		record, err := reader.Read()
-		if err == io.EOF {
+		rec, line, done, fatal := in.nextRecord(&errs)
+		if fatal != nil {
+			writeReadError(w, fatal)
+			return
+		}
+		if done {
 			break
 		}
-		if err != nil {
-			errorsArr = append(errorsArr, err.Error())
-			continue
-		}
-		m := mapFromRecord(header, record, idx)
+		m := mapFromRecord(in.header, rec, in.idx)
 		id := strings.TrimSpace(m["id"])
 		name := strings.TrimSpace(m["name"])
-		if name == "" {
-			errorsArr = append(errorsArr, "missing name")
-			continue
-		}
-		if len(name) > 100 {
-			errorsArr = append(errorsArr, "name too long: "+name)
-			continue
-		}
-		groupName := strings.TrimSpace(m["group_name"])
-		typ := strings.TrimSpace(m["type"])
-		if typ == "" {
-			typ = "boolean"
-		}
-		if typ != "boolean" && typ != "numerical" {
-			errorsArr = append(errorsArr, "invalid type "+typ)
-			continue
-		}
-		goalValStr := strings.TrimSpace(m["goal_value"])
-		goalVal := 1.0
-		if goalValStr != "" {
-			if v, err := strconv.ParseFloat(goalValStr, 64); err == nil {
-				if v <= 0 || v > 1e9 {
-					errorsArr = append(errorsArr, "invalid goal_value "+goalValStr)
-					continue
-				}
-				goalVal = v
-			} else {
-				errorsArr = append(errorsArr, "invalid goal_value "+goalValStr)
-				continue
-			}
-		}
-		goalPeriod := strings.TrimSpace(m["goal_period"])
-		if goalPeriod == "" {
-			goalPeriod = "daily"
-		}
-		if goalPeriod != "daily" && goalPeriod != "weekly" && goalPeriod != "monthly" {
-			errorsArr = append(errorsArr, "invalid goal_period "+goalPeriod)
-			continue
-		}
-		isNegStr := strings.TrimSpace(m["is_negative"])
-		isNeg := 0
-		if isNegStr == "1" || strings.EqualFold(isNegStr, "true") {
-			isNeg = 1
-		}
-		unit := strings.TrimSpace(m["unit"])
-		if len(unit) > 20 {
-			errorsArr = append(errorsArr, "unit too long")
-			continue
-		}
-		archived := strings.TrimSpace(m["archived_at"])
-		var archVal interface{}
-		if archived == "" {
-			archVal = nil
-		} else {
-			if _, err := time.Parse(time.RFC3339, archived); err != nil {
-				errorsArr = append(errorsArr, "invalid archived_at "+archived)
-				continue
-			}
-			archVal = archived
-		}
-		createdAt := strings.TrimSpace(m["created_at"])
-		if createdAt == "" {
-			createdAt = time.Now().UTC().Format(time.RFC3339)
-		} else {
-			if _, err := time.Parse(time.RFC3339, createdAt); err != nil {
-				createdAt = time.Now().UTC().Format(time.RFC3339)
-			}
-		}
-		updatedAt := time.Now().UTC().Format(time.RFC3339)
 
-		var existingID string
-		if id != "" {
-			err := tx.QueryRow(`SELECT id FROM habits WHERE id=?`, id).Scan(&existingID)
-			if err == nil {
-				_, err = tx.Exec(`UPDATE habits SET name=?, group_name=?, type=?, goal_value=?, goal_period=?, is_negative=?, unit=?, archived_at=?, updated_at=? WHERE id=?`,
-					name, groupName, typ, goalVal, goalPeriod, isNeg, unit, archVal, updatedAt, id)
+		// Target row: same id, else same name (historical upsert rule), else insert.
+		targetID, err := lookupID(tx, `SELECT id FROM habits WHERE id=?`, id)
+		if err != nil {
+			http.Error(w, "db error", 500)
+			return
+		}
+		if targetID == "" && name != "" {
+			if targetID, err = lookupID(tx, `SELECT id FROM habits WHERE name=? LIMIT 1`, name); err != nil {
+				http.Error(w, "db error", 500)
+				return
+			}
+		}
+
+		// Start from the stored row on update, from defaults on insert.
+		f := habit.Fields{Type: "boolean", GoalValue: 1, GoalPeriod: "daily"}
+		var archived sql.NullString
+		createdAt := now
+		if targetID != "" {
+			f, archived, createdAt, err = loadHabit(tx, targetID)
+			if err != nil {
+				http.Error(w, "db error", 500)
+				return
+			}
+		}
+
+		// A8: only columns present in the header (and in this record) override the current value.
+		if v, ok := m["name"]; ok {
+			f.Name = v
+		}
+		if v, ok := m["group_name"]; ok {
+			f.GroupName = v
+		}
+		if v, ok := m["type"]; ok {
+			f.Type = orDefault(strings.TrimSpace(v), "boolean")
+		}
+		if v, ok := m["goal_value"]; ok {
+			s := strings.TrimSpace(v)
+			if s == "" {
+				f.GoalValue = 1
+			} else {
+				g, err := strconv.ParseFloat(s, 64)
 				if err != nil {
-					errorsArr = append(errorsArr, err.Error())
+					errs.add("line %d: invalid goal_value %s", line, s)
 					continue
 				}
-				count++
-				continue
+				f.GoalValue = g
 			}
 		}
-		err = tx.QueryRow(`SELECT id FROM habits WHERE name=? LIMIT 1`, name).Scan(&existingID)
-		if err == nil && existingID != "" {
-			_, err = tx.Exec(`UPDATE habits SET name=?, group_name=?, type=?, goal_value=?, goal_period=?, is_negative=?, unit=?, archived_at=?, updated_at=? WHERE id=?`,
-				name, groupName, typ, goalVal, goalPeriod, isNeg, unit, archVal, updatedAt, existingID)
-			if err != nil {
-				errorsArr = append(errorsArr, err.Error())
-				continue
+		if v, ok := m["goal_period"]; ok {
+			f.GoalPeriod = orDefault(strings.TrimSpace(v), "daily")
+		}
+		if v, ok := m["is_negative"]; ok {
+			s := strings.TrimSpace(v)
+			f.IsNegative = s == "1" || strings.EqualFold(s, "true")
+		}
+		if v, ok := m["unit"]; ok {
+			f.Unit = v
+		}
+		if v, ok := m["archived_at"]; ok {
+			s := strings.TrimSpace(v)
+			archived = sql.NullString{}
+			if s != "" {
+				if _, err := time.Parse(time.RFC3339, s); err != nil {
+					errs.add("line %d: invalid archived_at %s", line, s)
+					continue
+				}
+				archived = sql.NullString{String: s, Valid: true}
 			}
-			count++
+		}
+		if targetID == "" {
+			if v := strings.TrimSpace(m["created_at"]); v != "" {
+				if _, err := time.Parse(time.RFC3339, v); err == nil {
+					createdAt = v
+				}
+			}
+		}
+
+		f = f.Normalize()
+		if err := f.Validate(); err != nil {
+			errs.add("line %d: %v", line, err)
 			continue
 		}
-		newID := id
-		if newID == "" {
-			newID = uuid.NewString()
+
+		if targetID != "" {
+			_, err = tx.Exec(`UPDATE habits SET name=?, group_name=?, type=?, goal_value=?, goal_period=?, is_negative=?, unit=?, archived_at=?, updated_at=? WHERE id=?`,
+				f.Name, f.GroupName, f.Type, f.GoalValue, f.GoalPeriod, boolInt(f.IsNegative), f.Unit, archived, now, targetID)
 		} else {
-			if _, err := uuid.Parse(newID); err != nil {
+			newID := id
+			if _, perr := uuid.Parse(newID); perr != nil {
 				newID = uuid.NewString()
 			}
+			_, err = tx.Exec(`INSERT INTO habits (id, name, group_name, type, goal_value, goal_period, is_negative, unit, archived_at, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
+				newID, f.Name, f.GroupName, f.Type, f.GoalValue, f.GoalPeriod, boolInt(f.IsNegative), f.Unit, archived, createdAt, now)
 		}
-		_, err = tx.Exec(`INSERT INTO habits (id, name, group_name, type, goal_value, goal_period, is_negative, unit, archived_at, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
-			newID, name, groupName, typ, goalVal, goalPeriod, isNeg, unit, archVal, createdAt, updatedAt)
 		if err != nil {
-			errorsArr = append(errorsArr, err.Error())
+			errs.add("line %d: %v", line, err)
 			continue
 		}
 		count++
@@ -290,96 +355,63 @@ func (h *Handler) ImportHabits(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]interface{}{"imported": count, "errors": errorsArr})
+	json.NewEncoder(w).Encode(map[string]interface{}{"imported": count, "errors": errs.result()})
 }
 
 func (h *Handler) ImportEntries(w http.ResponseWriter, r *http.Request) {
-	if err := r.ParseMultipartForm(10 << 20); err != nil && err != http.ErrNotMultipart {
-		http.Error(w, "invalid multipart", 400)
+	in, ok := newImportInput(w, r)
+	if !ok {
 		return
 	}
-	var reader *csv.Reader
-	file, _, err := r.FormFile("file")
-	if err == nil {
-		defer file.Close()
-		reader = csv.NewReader(file)
-	} else {
-		reader = csv.NewReader(r.Body)
-	}
-	reader.TrimLeadingSpace = true
-	reader.FieldsPerRecord = -1
-	header, err := reader.Read()
-	if err != nil {
-		http.Error(w, "invalid csv header", 400)
-		return
-	}
-	if len(header) > 0 {
-		header[0] = strings.TrimPrefix(header[0], "\xEF\xBB\xBF")
-	}
-	idx := headerIndex(header)
-	count := 0
-	errorsArr := []string{}
+	defer in.close()
 	tx, err := h.db.Begin()
 	if err != nil {
 		http.Error(w, "db begin failed", 500)
 		return
 	}
 	defer func() { _ = tx.Rollback() }()
+
+	count := 0
+	var errs errList
 	for {
-		record, err := reader.Read()
-		if err == io.EOF {
+		rec, line, done, fatal := in.nextRecord(&errs)
+		if fatal != nil {
+			writeReadError(w, fatal)
+			return
+		}
+		if done {
 			break
 		}
-		if err != nil {
-			errorsArr = append(errorsArr, err.Error())
-			continue
-		}
-		m := mapFromRecord(header, record, idx)
-		habitID := strings.TrimSpace(m["habit_id"])
-		habitName := strings.TrimSpace(m["habit_name"])
+		m := mapFromRecord(in.header, rec, in.idx)
 		date := strings.TrimSpace(m["date"])
-		valStr := strings.TrimSpace(m["value"])
 		if _, err := time.Parse("2006-01-02", date); err != nil {
-			errorsArr = append(errorsArr, "invalid date "+date)
+			errs.add("line %d: invalid date %s", line, date)
 			continue
 		}
 		val := 0.0
-		if valStr != "" {
-			if v, err := strconv.ParseFloat(valStr, 64); err == nil {
-				val = v
-			} else {
-				errorsArr = append(errorsArr, "invalid value "+valStr)
+		if s := strings.TrimSpace(m["value"]); s != "" {
+			v, err := strconv.ParseFloat(s, 64)
+			if err != nil || !validEntryValue(v) {
+				errs.add("line %d: invalid value %s", line, s)
 				continue
 			}
+			val = v
 		}
-		resolvedID := habitID
-		if resolvedID == "" && habitName != "" {
-			err := tx.QueryRow(`SELECT id FROM habits WHERE name=? LIMIT 1`, habitName).Scan(&resolvedID)
-			if err != nil {
-				errorsArr = append(errorsArr, "habit not found: "+habitName)
-				continue
-			}
+		habitID, userErr, dbErr := resolveHabit(tx, strings.TrimSpace(m["habit_id"]), strings.TrimSpace(m["habit_name"]))
+		if dbErr != nil {
+			http.Error(w, "db error", 500)
+			return
 		}
-		if resolvedID == "" {
-			errorsArr = append(errorsArr, "missing habit_id and habit_name")
-			continue
-		}
-		if _, err := uuid.Parse(resolvedID); err != nil {
-			errorsArr = append(errorsArr, "invalid habit_id "+resolvedID)
-			continue
-		}
-		var exists string
-		if err := tx.QueryRow(`SELECT id FROM habits WHERE id=?`, resolvedID).Scan(&exists); err != nil {
-			errorsArr = append(errorsArr, "habit_id not found: "+resolvedID)
+		if userErr != "" {
+			errs.add("line %d: %s", line, userErr)
 			continue
 		}
 		now := time.Now().UTC().Format(time.RFC3339)
-		newID := uuid.NewString()
 		_, err = tx.Exec(`INSERT INTO entries (id, habit_id, date, value, created_at, updated_at) VALUES (?,?,?,?,?,?)
 			ON CONFLICT(habit_id, date) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at`,
-			newID, resolvedID, date, val, now, now)
+			uuid.NewString(), habitID, date, val, now, now)
 		if err != nil {
-			errorsArr = append(errorsArr, err.Error())
+			errs.add("line %d: %v", line, err)
 			continue
 		}
 		count++
@@ -389,7 +421,75 @@ func (h *Handler) ImportEntries(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]interface{}{"imported": count, "errors": errorsArr})
+	json.NewEncoder(w).Encode(map[string]interface{}{"imported": count, "errors": errs.result()})
+}
+
+// resolveHabit finds the habit by id, then falls back to name (A8).
+// It returns a user-facing message for input errors and a separate error for database failures.
+func resolveHabit(tx *sql.Tx, habitID, habitName string) (id, userErr string, dbErr error) {
+	if habitID != "" {
+		found, err := lookupID(tx, `SELECT id FROM habits WHERE id=?`, habitID)
+		if err != nil {
+			return "", "", err
+		}
+		if found != "" {
+			return found, "", nil
+		}
+		if habitName == "" {
+			return "", "habit_id not found: " + habitID, nil
+		}
+	}
+	if habitName == "" {
+		return "", "missing habit_id and habit_name", nil
+	}
+	found, err := lookupID(tx, `SELECT id FROM habits WHERE name=? LIMIT 1`, habitName)
+	if err != nil {
+		return "", "", err
+	}
+	if found == "" {
+		return "", "habit not found: " + habitName, nil
+	}
+	return found, "", nil
+}
+
+// lookupID returns "" when no row matches.
+func lookupID(tx *sql.Tx, query, arg string) (string, error) {
+	var id string
+	err := tx.QueryRow(query, arg).Scan(&id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", nil
+	}
+	return id, err
+}
+
+func loadHabit(tx *sql.Tx, id string) (habit.Fields, sql.NullString, string, error) {
+	var f habit.Fields
+	var isNeg int
+	var archived sql.NullString
+	var created string
+	err := tx.QueryRow(`SELECT name, group_name, type, goal_value, goal_period, is_negative, unit, archived_at, created_at FROM habits WHERE id=?`, id).
+		Scan(&f.Name, &f.GroupName, &f.Type, &f.GoalValue, &f.GoalPeriod, &isNeg, &f.Unit, &archived, &created)
+	f.IsNegative = isNeg != 0
+	return f, archived, created, err
+}
+
+// validEntryValue mirrors the API rule (value >= 0) and rejects NaN and Inf.
+func validEntryValue(v float64) bool {
+	return !math.IsNaN(v) && !math.IsInf(v, 0) && v >= 0
+}
+
+func orDefault(s, def string) string {
+	if s == "" {
+		return def
+	}
+	return s
+}
+
+func boolInt(b bool) int {
+	if b {
+		return 1
+	}
+	return 0
 }
 
 func headerIndex(header []string) map[string]int {

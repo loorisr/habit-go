@@ -6,6 +6,7 @@ import HabitFormPage from './pages/HabitFormPage'
 import AdminPage from './pages/AdminPage'
 import LoginPage from './pages/LoginPage'
 import OfflineBanner from './components/OfflineBanner'
+import ErrorBoundary from './components/ErrorBoundary'
 import { api, clearAuthToken, getAuthToken } from './api'
 import { LanguageProvider, useI18n } from './i18n'
 
@@ -99,14 +100,16 @@ function AppInner() {
       </header>
       <OfflineBanner />
       <main className="max-w-5xl mx-auto px-4 py-6">
-        <Routes>
-          <Route path="/" element={<MainPage />} />
-          <Route path="/habits/new" element={<HabitFormPage />} />
-          <Route path="/habits/:id" element={<HabitPage />} />
-          <Route path="/habits/:id/edit" element={<HabitFormPage />} />
-          <Route path="/admin" element={<AdminPage />} />
-          <Route path="*" element={<div className="py-10 text-center text-gray-500">{t('pageNotFound')} <Link to="/" className="text-green-600 underline">{t('backHome')}</Link></div>} />
-        </Routes>
+        <ErrorBoundary>
+          <Routes>
+            <Route path="/" element={<MainPage />} />
+            <Route path="/habits/new" element={<HabitFormPage />} />
+            <Route path="/habits/:id" element={<HabitPage />} />
+            <Route path="/habits/:id/edit" element={<HabitFormPage />} />
+            <Route path="/admin" element={<AdminPage />} />
+            <Route path="*" element={<div className="py-10 text-center text-gray-500">{t('pageNotFound')} <Link to="/" className="text-green-600 underline">{t('backHome')}</Link></div>} />
+          </Routes>
+        </ErrorBoundary>
       </main>
     </div>
   )

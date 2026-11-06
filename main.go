@@ -78,7 +78,7 @@ func main() {
 
 	habitHandler := habit.NewHandler(habitRepo, entryRepo)
 	entryHandler := entry.NewHandler(entryRepo)
-	csvHandler := csvhandler.NewHandler(database, habitRepo)
+	csvHandler := csvhandler.NewHandler(database)
 
 	mux := http.NewServeMux()
 

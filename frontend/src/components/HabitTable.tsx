@@ -127,20 +127,39 @@ function CellButton({ habit, date, value, onToggle, onDecrement }: { habit: Habi
   const todayStr = localDateStr(new Date())
   const isToday = date === todayStr
 
-  const handleContextMenu = (e: React.MouseEvent) => {
-    e.preventDefault()
-    onDecrement(habit, date)
+  // A4: a press becomes a long press only if the pointer stays still; a scroll (pointercancel)
+  // or a move beyond MOVE_TOLERANCE cancels it, so scrolling a table never decrements a cell.
+  const LONG_PRESS_MS = 500
+  const MOVE_TOLERANCE = 10
+  const pressRef = useRef<{ x: number; y: number } | null>(null)
+
+  const cancelPress = () => {
+    if (timerRef.current !== null) clearTimeout(timerRef.current)
+    timerRef.current = null
+    pressRef.current = null
   }
 
-  const onPointerDown = () => {
+  const handleContextMenu = (e: React.MouseEvent) => {
+    e.preventDefault()
+    // on touch devices the long press already decremented: the context menu must not do it again
+    if (!longPressTriggered.current) onDecrement(habit, date)
+  }
+
+  const onPointerDown = (e: React.PointerEvent) => {
     longPressTriggered.current = false
+    if (e.pointerType === 'mouse' && e.button !== 0) return
+    cancelPress()
+    pressRef.current = { x: e.clientX, y: e.clientY }
     timerRef.current = window.setTimeout(() => {
+      timerRef.current = null
+      pressRef.current = null
       longPressTriggered.current = true
       onDecrement(habit, date)
-    }, 500)
+    }, LONG_PRESS_MS)
   }
-  const onPointerUp = () => {
-    if (timerRef.current) clearTimeout(timerRef.current)
+  const onPointerMove = (e: React.PointerEvent) => {
+    const p = pressRef.current
+    if (p && Math.hypot(e.clientX - p.x, e.clientY - p.y) > MOVE_TOLERANCE) cancelPress()
   }
   const onClick = () => {
     if (longPressTriggered.current) return
@@ -165,11 +184,11 @@ function CellButton({ habit, date, value, onToggle, onDecrement }: { habit: Habi
     <button
       onClick={onClick}
       onContextMenu={handleContextMenu}
-      onTouchStart={onPointerDown}
-      onTouchEnd={onPointerUp}
-      onMouseDown={onPointerDown}
-      onMouseUp={onPointerUp}
-      onMouseLeave={onPointerUp}
+      onPointerDown={onPointerDown}
+      onPointerMove={onPointerMove}
+      onPointerUp={cancelPress}
+      onPointerCancel={cancelPress}
+      onPointerLeave={cancelPress}
       onKeyDown={handleKeyDown}
       title={t('cellHint')}
       aria-label={ariaLabel}
