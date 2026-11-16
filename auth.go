@@ -43,8 +43,13 @@ func (a *authConfig) isSecure(r *http.Request) bool {
 
 func (a *authConfig) clientIP(r *http.Request) string {
 	if a.trustProxy {
-		if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
-			return strings.TrimSpace(strings.Split(xff, ",")[0])
+		// The rightmost entry is the one added by the trusted proxy; entries to its
+		// left come from the client and can be forged to dodge the login limiter.
+		parts := strings.Split(r.Header.Get("X-Forwarded-For"), ",")
+		for i := len(parts) - 1; i >= 0; i-- {
+			if ip := strings.TrimSpace(parts[i]); ip != "" {
+				return ip
+			}
 		}
 	}
 	host, _, err := net.SplitHostPort(r.RemoteAddr)

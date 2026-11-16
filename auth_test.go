@@ -175,3 +175,28 @@ func TestStatusReportsAuthentication(t *testing.T) {
 		t.Errorf("status = %v, want protected and not authenticated", got)
 	}
 }
+
+func TestClientIPUsesRightmostForwardedFor(t *testing.T) {
+	cases := []struct {
+		trust bool
+		xff   string
+		want  string
+	}{
+		{true, "198.51.100.1, 1.2.3.4", "1.2.3.4"},
+		{true, "1.2.3.4", "1.2.3.4"},
+		{true, "1.2.3.4, ", "1.2.3.4"},
+		{true, "", "203.0.113.7"},
+		{false, "1.2.3.4", "203.0.113.7"},
+	}
+	for _, c := range cases {
+		a := &authConfig{trustProxy: c.trust}
+		req := httptest.NewRequest("GET", "/", nil)
+		req.RemoteAddr = "203.0.113.7:5555"
+		if c.xff != "" {
+			req.Header.Set("X-Forwarded-For", c.xff)
+		}
+		if got := a.clientIP(req); got != c.want {
+			t.Errorf("trust=%v xff=%q: got %q, want %q", c.trust, c.xff, got, c.want)
+		}
+	}
+}
